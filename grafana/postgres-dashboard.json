@@ -44,7 +44,7 @@
     {
       "id": 1,
       "type": "row",
-      "title": "Состояние",
+      "title": "Состояние — все хосты",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -70,8 +70,8 @@
       },
       "targets": [
         {
-          "expr": "pg_up{pg_instance=\"$pg_instance\"}",
-          "legendFormat": "up",
+          "expr": "pg_up",
+          "legendFormat": "{{pg_instance}}",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -128,11 +128,11 @@
         },
         "textMode": "value_and_name",
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
-        "orientation": "auto"
+        "orientation": "horizontal"
       },
-      "description": "1 — экспортёр на хосте БД подключается к Postgres. 0 — нет. Разрыв означает, что не работал сам мониторинг."
+      "description": "1 — экспортёр на хосте БД подключается к Postgres. 0 — нет. Разрыв означает, что не работал сам мониторинг. Показывает ОБА хоста сразу, фильтр сверху на этот блок не действует."
     },
     {
       "id": 3,
@@ -150,8 +150,8 @@
       },
       "targets": [
         {
-          "expr": "sum(pg_stat_activity_count{pg_instance=\"$pg_instance\"}) / max(pg_settings_max_connections{pg_instance=\"$pg_instance\"})",
-          "legendFormat": "занято",
+          "expr": "sum by (pg_instance) (pg_stat_activity_count) / max by (pg_instance) (pg_settings_max_connections)",
+          "legendFormat": "{{pg_instance}}",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -194,13 +194,13 @@
           "fields": "",
           "values": false
         },
-        "textMode": "auto",
+        "textMode": "value_and_name",
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
-        "orientation": "auto"
+        "orientation": "horizontal"
       },
-      "description": "Занято от max_connections. Упрётся в 100% — новые клиенты получат отказ, а pg_up останется единицей."
+      "description": "Занято от max_connections. Упрётся в 100% — новые клиенты получат отказ, а pg_up останется единицей. Показывает ОБА хоста сразу, фильтр сверху на этот блок не действует."
     },
     {
       "id": 4,
@@ -218,8 +218,8 @@
       },
       "targets": [
         {
-          "expr": "1 - node_filesystem_avail_bytes{pg_instance=\"$pg_instance\",mountpoint=\"/data_db\"} / node_filesystem_size_bytes{pg_instance=\"$pg_instance\",mountpoint=\"/data_db\"}",
-          "legendFormat": "занято",
+          "expr": "1 - node_filesystem_avail_bytes{mountpoint=\"/data_db\"} / node_filesystem_size_bytes{mountpoint=\"/data_db\"}",
+          "legendFormat": "{{pg_instance}}",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -262,13 +262,13 @@
           "fields": "",
           "values": false
         },
-        "textMode": "auto",
+        "textMode": "value_and_name",
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
-        "orientation": "auto"
+        "orientation": "horizontal"
       },
-      "description": "Том с данными. Переполнение останавливает запись в Postgres мгновенно."
+      "description": "Том с данными. Переполнение останавливает запись в Postgres мгновенно. Показывает ОБА хоста сразу, фильтр сверху на этот блок не действует."
     },
     {
       "id": 5,
@@ -286,8 +286,8 @@
       },
       "targets": [
         {
-          "expr": "1 - node_filesystem_avail_bytes{pg_instance=\"$pg_instance\",mountpoint=\"/mwal\"} / node_filesystem_size_bytes{pg_instance=\"$pg_instance\",mountpoint=\"/mwal\"}",
-          "legendFormat": "занято",
+          "expr": "1 - node_filesystem_avail_bytes{mountpoint=\"/mwal\"} / node_filesystem_size_bytes{mountpoint=\"/mwal\"}",
+          "legendFormat": "{{pg_instance}}",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -330,13 +330,13 @@
           "fields": "",
           "values": false
         },
-        "textMode": "auto",
+        "textMode": "value_and_name",
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
-        "orientation": "auto"
+        "orientation": "horizontal"
       },
-      "description": "Том с WAL. Растёт при живой базе — обычно застрявший слот репликации или сломанный archive_command."
+      "description": "Том с WAL. Растёт при живой базе — обычно застрявший слот репликации или сломанный archive_command. Показывает ОБА хоста сразу, фильтр сверху на этот блок не действует."
     },
     {
       "id": 6,
@@ -354,8 +354,8 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(pg_stat_database_xact_commit{pg_instance=\"$pg_instance\"}[5m])) + sum(rate(pg_stat_database_xact_rollback{pg_instance=\"$pg_instance\"}[5m]))",
-          "legendFormat": "tps",
+          "expr": "sum by (pg_instance) (rate(pg_stat_database_xact_commit[5m])) + sum by (pg_instance) (rate(pg_stat_database_xact_rollback[5m]))",
+          "legendFormat": "{{pg_instance}}",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -378,13 +378,13 @@
           "fields": "",
           "values": false
         },
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
         "justifyMode": "auto",
-        "orientation": "auto"
+        "orientation": "horizontal"
       },
-      "description": "Коммиты плюс откаты. Основной показатель нагрузки."
+      "description": "Коммиты плюс откаты. Основной показатель нагрузки. Показывает ОБА хоста сразу, фильтр сверху на этот блок не действует."
     },
     {
       "id": 7,
@@ -402,8 +402,8 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(pg_stat_database_blks_hit{pg_instance=\"$pg_instance\"}[15m])) / (sum(rate(pg_stat_database_blks_hit{pg_instance=\"$pg_instance\"}[15m])) + sum(rate(pg_stat_database_blks_read{pg_instance=\"$pg_instance\"}[15m])))",
-          "legendFormat": "hit",
+          "expr": "sum by (pg_instance) (rate(pg_stat_database_blks_hit[15m])) / (sum by (pg_instance) (rate(pg_stat_database_blks_hit[15m])) + sum by (pg_instance) (rate(pg_stat_database_blks_read[15m])))",
+          "legendFormat": "{{pg_instance}}",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -446,18 +446,18 @@
           "fields": "",
           "values": false
         },
-        "textMode": "auto",
+        "textMode": "value_and_name",
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
-        "orientation": "auto"
+        "orientation": "horizontal"
       },
-      "description": "Ниже 95% — база регулярно ходит мимо shared_buffers. Пусто = трафика не было: отношение не определено, а не равно нулю."
+      "description": "Ниже 95% — база регулярно ходит мимо shared_buffers. Пусто = трафика не было: отношение не определено, а не равно нулю. Показывает ОБА хоста сразу, фильтр сверху на этот блок не действует."
     },
     {
       "id": 8,
       "type": "row",
-      "title": "Подключения и нагрузка",
+      "title": "Подключения и нагрузка — $pg_instance",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -591,7 +591,7 @@
     {
       "id": 11,
       "type": "row",
-      "title": "Диски и хост",
+      "title": "Диски и хост — $pg_instance",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -778,7 +778,7 @@
     {
       "id": 15,
       "type": "row",
-      "title": "Эффективность",
+      "title": "Эффективность — $pg_instance",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -841,7 +841,7 @@
           "sort": "desc"
         }
       },
-      "description": "Разрыв на графике означает «трафика не было», а не «ноль попаданий»."
+      "description": "Разрыв на графике означает «трафика не было», а не «ноль попаданий»: на простое отношение не определено."
     },
     {
       "id": 17,
@@ -956,7 +956,7 @@
     {
       "id": 19,
       "type": "row",
-      "title": "Транзакции, блокировки, WAL",
+      "title": "Транзакции, блокировки, WAL — $pg_instance",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -1134,7 +1134,7 @@
     {
       "id": 23,
       "type": "row",
-      "title": "WAL, чекпоинты, репликация",
+      "title": "WAL, чекпоинты, репликация — $pg_instance",
       "collapsed": false,
       "gridPos": {
         "h": 1,
