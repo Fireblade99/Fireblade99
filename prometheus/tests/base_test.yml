@@ -1,0 +1,227 @@
+# =====================================================================
+# Тесты БАЗОВОГО набора правил (работает без каких-либо доработок).
+#
+#   promtool test rules prometheus/tests/base_test.yml
+#
+# Проверяем не только «алерт сработал», но и «НЕ сработал, когда не
+# должен». Ложные срабатывания приводят к тому, что алерты начинают
+# игнорировать, а это хуже их отсутствия.
+# =====================================================================
+
+rule_files:
+  - ../rules/postgres.recording.yml
+  - ../rules/postgres.alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+
+  # -------------------------------------------------------------------
+  # Доступность
+  # -------------------------------------------------------------------
+  - interval: 30s
+    name: "база не отвечает -> PostgresDown"
+    input_series:
+      - series: 'pg_up{pg_instance="db1",job="postgres-exporter"}'
+        values: "0+0x40"
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="PostgresDown",alertstate="firing"}'
+        eval_time: 30s            # for: 1m ещё не выдержан
+        exp_samples: []
+      - expr: 'ALERTS{alertname="PostgresDown",alertstate="firing"}'
+        eval_time: 2m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PostgresDown", alertstate="firing", job="postgres-exporter", pg_instance="db1", severity="critical"}'
+            value: 1
+
+  # -------------------------------------------------------------------
+  # Насыщение по коннектам (проверяет и суммирование по state/usename)
+  # -------------------------------------------------------------------
+  - interval: 30s
+    name: "95 из 100 слотов -> critical"
+    input_series:
+      - series: 'pg_stat_activity_count{pg_instance="db1",job="postgres-exporter",datname="appdb",state="active",usename="app"}'
+        values: "60+0x40"
+      - series: 'pg_stat_activity_count{pg_instance="db1",job="postgres-exporter",datname="appdb",state="idle",usename="app"}'
+        values: "35+0x40"
+      - series: 'pg_settings_max_connections{pg_instance="db1",job="postgres-exporter"}'
+        values: "100+0x40"
+    promql_expr_test:
+      - expr: 'pg:connections:utilization'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'pg:connections:utilization{pg_instance="db1"}'
+            value: 0.95
+      - expr: 'ALERTS{alertname="PostgresConnectionsCritical",alertstate="firing"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PostgresConnectionsCritical", alertstate="firing", pg_instance="db1", severity="critical"}'
+            value: 1
+
+  - interval: 30s
+    name: "50 из 100 слотов -> тишина"
+    input_series:
+      - series: 'pg_stat_activity_count{pg_instance="db1",job="postgres-exporter",datname="appdb",state="idle",usename="app"}'
+        values: "50+0x40"
+      - series: 'pg_settings_max_connections{pg_instance="db1",job="postgres-exporter"}'
+        values: "100+0x40"
+    promql_expr_test:
+      - expr: 'ALERTS{alertname=~"PostgresConnections.*",alertstate="firing"}'
+        eval_time: 10m
+        exp_samples: []
+
+  - interval: 30s
+    name: "сессия 10 минут в idle in transaction -> алерт"
+    input_series:
+      - series: 'pg_stat_activity_max_tx_duration{pg_instance="db1",job="postgres-exporter",datname="appdb",state="idle in transaction",usename="app",application_name="billing"}'
+        values: "600+0x40"
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="PostgresIdleInTransaction",alertstate="firing"}'
+        eval_time: 10m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PostgresIdleInTransaction", alertstate="firing", application_name="billing", datname="appdb", job="postgres-exporter", pg_instance="db1", severity="warning", state="idle in transaction", usename="app"}'
+            value: 1
+
+  # Активная транзакция на 10 минут — это нормально, алерт про idle
+  # не должен на неё реагировать.
+  - interval: 30s
+    name: "активная транзакция 10 минут -> idle-алерт молчит"
+    input_series:
+      - series: 'pg_stat_activity_max_tx_duration{pg_instance="db1",job="postgres-exporter",datname="appdb",state="active",usename="app",application_name="etl"}'
+        values: "600+0x40"
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="PostgresIdleInTransaction",alertstate="firing"}'
+        eval_time: 10m
+        exp_samples: []
+
+  # -------------------------------------------------------------------
+  # ДИСКИ — фильтр по точкам монтирования
+  # -------------------------------------------------------------------
+  - interval: 30s
+    name: "/data_db занят на 95% -> critical"
+    input_series:
+      - series: 'node_filesystem_avail_bytes{pg_instance="db1",job="node-exporter",mountpoint="/data_db",fstype="xfs"}'
+        values: "2680789401+0x60"
+      - series: 'node_filesystem_size_bytes{pg_instance="db1",job="node-exporter",mountpoint="/data_db",fstype="xfs"}'
+        values: "53615788032+0x60"
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="PostgresDiskCritical",alertstate="firing"}'
+        eval_time: 20m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PostgresDiskCritical", alertstate="firing", fstype="xfs", job="node-exporter", mountpoint="/data_db", pg_instance="db1", severity="critical"}'
+            value: 1
+
+  # РЕГРЕССИЯ. Раньше фильтр был «любая ФС кроме tmpfs», и на этом
+  # хосте алерт орал бы про /boot, /var/log/audit и /home — тома, к
+  # базе отношения не имеющие. Теперь фильтр по конкретным точкам.
+  - interval: 30s
+    name: "/boot и /var/log/audit забиты -> тишина, они не про базу"
+    input_series:
+      - series: 'node_filesystem_avail_bytes{pg_instance="db1",job="node-exporter",mountpoint="/boot",fstype="ext4"}'
+        values: "10000000+0x60"
+      - series: 'node_filesystem_size_bytes{pg_instance="db1",job="node-exporter",mountpoint="/boot",fstype="ext4"}'
+        values: "1020702720+0x60"
+      - series: 'node_filesystem_avail_bytes{pg_instance="db1",job="node-exporter",mountpoint="/var/log/audit",fstype="xfs"}'
+        values: "20000000+0x60"
+      - series: 'node_filesystem_size_bytes{pg_instance="db1",job="node-exporter",mountpoint="/var/log/audit",fstype="xfs"}'
+        values: "2080374784+0x60"
+    promql_expr_test:
+      - expr: 'ALERTS{alertname=~"PostgresDisk.*|PostgresLogDisk.*",alertstate="firing"}'
+        eval_time: 40m
+        exp_samples: []
+
+  # Логи — своя критичность: база живёт, но следующий инцидент будет
+  # нечем разбирать.
+  - interval: 30s
+    name: "/pg_log занят на 90% -> warning, не critical"
+    input_series:
+      - series: 'node_filesystem_avail_bytes{pg_instance="db1",job="node-exporter",mountpoint="/pg_log",fstype="xfs"}'
+        values: "3214095155+0x80"
+      - series: 'node_filesystem_size_bytes{pg_instance="db1",job="node-exporter",mountpoint="/pg_log",fstype="xfs"}'
+        values: "32140951552+0x80"
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="PostgresLogDiskLow",alertstate="firing"}'
+        eval_time: 40m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PostgresLogDiskLow", alertstate="firing", fstype="xfs", job="node-exporter", mountpoint="/pg_log", pg_instance="db1", severity="warning"}'
+            value: 1
+      # том с логами не должен поднимать critical по данным
+      - expr: 'ALERTS{alertname="PostgresDiskCritical",alertstate="firing"}'
+        eval_time: 40m
+        exp_samples: []
+
+  - interval: 30s
+    name: "/data_db занят на 50% -> тишина"
+    input_series:
+      - series: 'node_filesystem_avail_bytes{pg_instance="db1",job="node-exporter",mountpoint="/data_db",fstype="xfs"}'
+        values: "26807894016+0x60"
+      - series: 'node_filesystem_size_bytes{pg_instance="db1",job="node-exporter",mountpoint="/data_db",fstype="xfs"}'
+        values: "53615788032+0x60"
+    promql_expr_test:
+      - expr: 'ALERTS{alertname=~"PostgresDisk.*",alertstate="firing"}'
+        eval_time: 20m
+        exp_samples: []
+
+  # -------------------------------------------------------------------
+  # OOM killer
+  # -------------------------------------------------------------------
+  - interval: 30s
+    name: "сработал OOM killer -> critical"
+    input_series:
+      - series: 'node_vmstat_oom_kill{pg_instance="db1",job="node-exporter"}'
+        values: "0+0x20 1+0x40"
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HostOOMKill",alertstate="firing"}'
+        eval_time: 15m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HostOOMKill", alertstate="firing", job="node-exporter", pg_instance="db1", severity="critical"}'
+            value: 1
+
+  # -------------------------------------------------------------------
+  # CACHE HIT — регрессия на деление 0/0
+  # -------------------------------------------------------------------
+  # Раньше знаменатель поднимался до 1 через clamp_min: на простое
+  # отношение выходило ровно 0 и алерт «< 95%» срабатывал на ровном
+  # месте. Теперь 0/0 = NaN, сравнение не проходит, алерт молчит.
+  - interval: 30s
+    name: "база простаивает -> cache hit не определён, ложного алерта нет"
+    input_series:
+      - series: 'pg_stat_database_blks_hit{datname="appdb",pg_instance="db1",job="postgres-exporter"}'
+        values: "1000+0x80"
+      - series: 'pg_stat_database_blks_read{datname="appdb",pg_instance="db1",job="postgres-exporter"}'
+        values: "10+0x80"
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="PostgresLowCacheHitRatio",alertstate="firing"}'
+        eval_time: 40m
+        exp_samples: []
+
+  - interval: 30s
+    name: "трафик есть, попаданий 50% -> алерт"
+    input_series:
+      - series: 'pg_stat_database_blks_hit{datname="appdb",pg_instance="db1",job="postgres-exporter"}'
+        values: "0+50x80"
+      - series: 'pg_stat_database_blks_read{datname="appdb",pg_instance="db1",job="postgres-exporter"}'
+        values: "0+50x80"
+    promql_expr_test:
+      - expr: 'pg:cache:hit_ratio'
+        eval_time: 40m
+        exp_samples:
+          - labels: 'pg:cache:hit_ratio{pg_instance="db1"}'
+            value: 0.5
+      - expr: 'ALERTS{alertname="PostgresLowCacheHitRatio",alertstate="firing"}'
+        eval_time: 40m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PostgresLowCacheHitRatio", alertstate="firing", pg_instance="db1", severity="warning"}'
+            value: 1
+
+  - interval: 30s
+    name: "трафик есть, попаданий 99% -> тишина"
+    input_series:
+      - series: 'pg_stat_database_blks_hit{datname="appdb",pg_instance="db1",job="postgres-exporter"}'
+        values: "0+99x80"
+      - series: 'pg_stat_database_blks_read{datname="appdb",pg_instance="db1",job="postgres-exporter"}'
+        values: "0+1x80"
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="PostgresLowCacheHitRatio",alertstate="firing"}'
+        eval_time: 40m
+        exp_samples: []

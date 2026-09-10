@@ -1,0 +1,179 @@
+# =====================================================================
+# Алерты, требующие ПРОБЕРА (pg-probe на вашей машине).
+#
+# ПОДКЛЮЧАТЬ ТОЛЬКО если пробер реально запущен и его job есть в
+# prometheus.yml. Иначе правила молча никогда не сработают.
+#
+# Зачем пробер, если экспортёры уже стоят: коллекторы 0.17.1 закрывают
+# почти всё, но время отклика не даёт ни один из них — экспортёр живёт
+# на хосте БД и путь по сети не видит по определению. Плюс расхождение
+# pg_up и pgprobe_up само по себе диагноз.
+#
+# Пробер даёт сверх экспортёров ровно три вещи:
+#   1. время отклика, разложенное на слои
+#   2. «база жива, но недоступна отсюда» — то есть проблема в сети
+#   3. заблокированные сессии (pg_locks_count разбит по mode,
+#      но не по granted, и коллектора для этого нет)
+# =====================================================================
+groups:
+
+  - name: postgres.probe.recording
+    interval: 30s
+    rules:
+
+      # session_ping — SELECT 1 по уже открытому соединению.
+      # Чистая отзывчивость сервера: сам запрос не делает ничего.
+      - record: pg:session_ping:p95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (pg_instance, le) (rate(pgprobe_session_ping_seconds_bucket[5m]))
+          )
+
+      # connect — стоимость установки соединения: сеть + TLS + авторизация
+      - record: pg:connect:p95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (pg_instance, le) (rate(pgprobe_connect_seconds_bucket[5m]))
+          )
+
+      # tcp_connect — только сеть, Postgres не участвует
+      - record: pg:tcp_connect:p95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (pg_instance, le) (rate(pgprobe_tcp_connect_seconds_bucket[5m]))
+          )
+
+  # ===================================================================
+  # ДОСТУПНОСТЬ — два наблюдателя дают три разных диагноза
+  # ===================================================================
+  - name: postgres.probe.availability
+    rules:
+
+      # Экспортёр на хосте базу видит, а мы — нет. Классическая сетевая
+      # авария: файрвол, маршрут, DNS. База при этом жива и обслуживает
+      # тех, кто ближе. Без пробера этот случай неотличим от нормы.
+      - alert: PostgresUnreachable
+        expr: pgprobe_up == 0 and on (pg_instance) pg_up == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "База жива, но недоступна отсюда ({{ $labels.pg_instance }})"
+          description: >-
+            Экспортёр на хосте БД подключается к Postgres успешно, наш
+            пробер — нет. Это проблема сети между мониторингом и базой,
+            не проблема базы. Точная причина в
+            pgprobe_failures_total{reason}: network, dns, timeout, tls.
+
+      # absent() возвращает серию БЕЗ меток, поэтому сопоставить её по
+      # pg_instance нельзя — признаком «лежит весь хост» служит то, что
+      # Prometheus не может опросить экспортёр.
+      - alert: PostgresHostDown
+        expr: pgprobe_up == 0 and on (pg_instance) up{job="postgres-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Хост БД не отвечает целиком ({{ $labels.pg_instance }})"
+          description: >-
+            Ни база, ни экспортёр на её хосте не отвечают. Похоже на
+            отказ всей машины или сегмента сети.
+
+      # Ловит зависший пробер, а не упавшую базу: метрика на месте,
+      # но давно не обновлялась.
+      - alert: PostgresProbeStale
+        expr: time() - pgprobe_last_success_timestamp_seconds > 600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "10 минут нет ни одной успешной проверки ({{ $labels.pg_instance }})"
+          description: >-
+            Последняя успешная проверка была
+            {{ $value | humanizeDuration }} назад. Либо база недоступна
+            всё это время, либо завис сам пробер.
+
+  # ===================================================================
+  # ВРЕМЯ ОТКЛИКА — то, чего не даёт ни один коллектор
+  # ===================================================================
+  - name: postgres.probe.latency
+    rules:
+
+      # Порог 250 мс для SELECT 1 по готовому соединению означает, что
+      # серверу плохо: запрос не делает ничего.
+      - alert: PostgresSlowResponse
+        expr: pg:session_ping:p95 > 0.25
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres отвечает медленно: p95 {{ $value | humanizeDuration }}"
+          description: >-
+            Смотри нагрузку, блокировки (pgprobe_blocked_sessions),
+            насыщение по коннектам и iowait на хосте.
+
+      - alert: PostgresVerySlowResponse
+        expr: pg:session_ping:p95 > 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Postgres почти не отвечает: p95 {{ $value | humanizeDuration }}"
+          description: >-
+            SELECT 1 занимает больше секунды. Формально база жива, но
+            для приложения это уже отказ.
+
+      # Подключаться долго, а работать быстро — проблема не в сервере,
+      # а в установке соединения. Второе условие отсекает случай
+      # «всё медленно», который ловится алертами выше.
+      - alert: PostgresSlowConnect
+        expr: pg:connect:p95 > 1 and pg:session_ping:p95 < 0.25
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Долгая установка соединения при здоровом сервере"
+          description: >-
+            Подключение занимает {{ $value | humanizeDuration }}, при
+            этом открытые соединения работают быстро. Типичное:
+            заканчиваются слоты max_connections, дорогой TLS-хендшейк,
+            тормозящий DNS, отсутствие пула на стороне приложения.
+
+      # Отделяет медленную сеть от медленной базы: TCP-хендшейк
+      # Postgres вообще не касается.
+      - alert: PostgresNetworkSlow
+        expr: pg:tcp_connect:p95 > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Медленная сеть до базы: TCP-хендшейк {{ $value | humanizeDuration }}"
+          description: >-
+            Открытие сокета до хоста БД занимает больше 500 мс.
+            Postgres тут ни при чём — это канал между мониторингом и базой.
+
+  # ===================================================================
+  # БЛОКИРОВКИ
+  # ===================================================================
+  - name: postgres.probe.locks
+    rules:
+
+      # pg_locks_count в экспортёре разбит по mode, но не по granted,
+      # и отдельного коллектора для этого нет — только через пробер.
+      - alert: PostgresBlockedSessions
+        expr: pgprobe_blocked_sessions > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} сессий ждут снятия блокировки"
+          description: >-
+            Кто-то кого-то блокирует уже 5 минут. Разбор:
+            SELECT blocked.pid AS blocked_pid, blocking.pid AS blocking_pid
+            FROM pg_locks blocked
+            JOIN pg_locks blocking ON blocking.transactionid = blocked.transactionid
+                 AND blocking.granted
+            WHERE NOT blocked.granted;

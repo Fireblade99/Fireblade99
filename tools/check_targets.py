@@ -30,7 +30,7 @@ try:
 except ImportError:                                         # pragma: no cover
     sys.exit("нужен pyyaml: pip install pyyaml")
 
-RULES_DIR = Path(__file__).resolve().parent.parent / "prometheus" / "rules"
+RULES_ROOT = Path(__file__).resolve().parent.parent / "prometheus" / "rules"
 
 # Всё, что синтаксис PromQL, а не имя метрики.
 PROMQL_BUILTINS = {
@@ -108,17 +108,22 @@ def required_metrics():
     """{метрика: {правила, которым она нужна}}, без recording-правил."""
     recorded, needed = set(), defaultdict(set)
     docs = []
-    for path in sorted(RULES_DIR.glob("*.yml")):
-        docs.append(yaml.safe_load(path.read_text(encoding="utf-8")))
-    for doc in docs:
+    # Базовые правила + optional/: проверяем всё, что может быть
+    # подключено, иначе проверка не заметит поломку в опциональном наборе.
+    # Помечаем происхождение: отсутствие метрики для [optional] — норма,
+    # пока набор не подключён, а для [base] это настоящая поломка.
+    for path in sorted(RULES_ROOT.glob("**/*.yml")):
+        origin = "optional" if path.parent.name == "optional" else "base"
+        docs.append((origin, yaml.safe_load(path.read_text(encoding="utf-8"))))
+    for _, doc in docs:
         for group in doc["groups"]:
             for rule in group["rules"]:
                 if "record" in rule:
                     recorded.add(rule["record"])
-    for doc in docs:
+    for origin, doc in docs:
         for group in doc["groups"]:
             for rule in group["rules"]:
-                name = rule.get("alert") or rule.get("record")
+                name = f"{rule.get('alert') or rule.get('record')} [{origin}]"
                 for metric in extract_metrics(rule["expr"]):
                     # recording-правила Prometheus вычисляет сам —
                     # их не должно быть на эндпоинтах
@@ -216,9 +221,16 @@ def main():
         for metric, rules in items:
             print(f"    {metric}")
             print(f"      нужна для: {', '.join(rules)}")
-    print("\nВероятная причина — другая версия экспортёра: имена метрик")
-    print("между версиями меняются. Сообщи, какие именно отсутствуют,")
-    print("и правила надо будет поправить под твою версию.")
+    print("\nЧто это может значить:")
+    print("  [optional] — набор правил не подключён к Prometheus, и это НОРМА,")
+    print("               пока не включены нужные коллекторы или не запущен пробер.")
+    print("  pg_stat_user_tables_* / pg_statio_* — экспортёр подключён к базе БЕЗ")
+    print("               пользовательских таблиц (часто к postgres). Коллектор тут")
+    print("               ни при чём: он включён по умолчанию, просто считать нечего.")
+    print("               Лечится сменой базы в строке подключения или")
+    print("               флагом --auto-discover-databases.")
+    print("  всё остальное — вероятно, другая версия экспортёра: имена метрик")
+    print("               между версиями меняются.")
     return 1
 
 

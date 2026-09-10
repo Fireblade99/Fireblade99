@@ -1,0 +1,188 @@
+# =====================================================================
+# Алерты, требующие ВКЛЮЧЕНИЯ дополнительных коллекторов экспортёра.
+#
+# ПОДКЛЮЧАТЬ ТОЛЬКО ПОСЛЕ того, как админы добавят флаги. Иначе метрик
+# не будет, и правила молча никогда не сработают — худший вид поломки
+# мониторинга. Проверить: tools/check_targets.py
+#
+# Нужные флаги (postgres_exporter 0.17.1, ExecStart в systemd-юните):
+#   --collector.database_wraparound
+#   --collector.postmaster
+#   --collector.stat_user_tables
+#   --collector.replication_slot
+#   --collector.stat_statements
+#
+# Рестарт Postgres НЕ нужен — только рестарт самого экспортёра.
+# =====================================================================
+groups:
+
+  # ===================================================================
+  # WRAPAROUND — тихий убийца
+  # ===================================================================
+  - name: postgres.wraparound
+    rules:
+
+      # ОСТОРОЖНО с именем метрики: суффикс _seconds в ней ВРЁТ.
+      # Значение — количество транзакций (age(datfrozenxid)), а не
+      # секунды. Проверено прямым сравнением с SQL на 0.17.1.
+      - record: pg:wraparound:ratio
+        expr: |
+          pg_database_wraparound_age_datfrozenxid_seconds
+          / on (pg_instance) group_left
+          max by (pg_instance) (pg_settings_autovacuum_freeze_max_age)
+
+      - alert: PostgresXidWraparoundApproaching
+        expr: pg:wraparound:ratio > 0.75
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Возраст транзакций базы {{ $labels.datname }} — {{ $value | humanizePercentage }} от порога"
+          description: >-
+            age(datfrozenxid) подбирается к autovacuum_freeze_max_age.
+            Обычно значит, что автовакуум не справляется, либо ему мешает
+            долгая транзакция или брошенный слот репликации.
+
+      # На 2 млрд транзакций Postgres останавливает приём записи. Это не
+      # деградация, а полная остановка, и лечится долгим VACUUM FREEZE
+      # в оффлайне. Порог 1 млрд — половина запаса.
+      - alert: PostgresXidWraparoundCritical
+        expr: pg_database_wraparound_age_datfrozenxid_seconds > 1000000000
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Wraparound: база {{ $labels.datname }}, возраст {{ $value }} транзакций"
+          description: >-
+            До аварийной остановки записи осталось меньше половины
+            запаса (лимит 2 млрд). Нужен VACUUM (FREEZE) по самым старым
+            таблицам и устранение того, что мешает автовакууму.
+
+      # Отдельный счётчик и отдельный лимит. Переполнение multixact
+      # останавливает базу так же, а замечают его ещё реже.
+      - alert: PostgresMultixactWraparound
+        expr: |
+          pg_database_wraparound_age_datminmxid_seconds
+          / on (pg_instance) group_left
+          max by (pg_instance) (pg_settings_autovacuum_multixact_freeze_max_age) > 0.75
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Возраст multixact базы {{ $labels.datname }} — {{ $value | humanizePercentage }} от порога"
+          description: >-
+            Multixact-идентификаторы переполняются так же, как обычные
+            XID, и с тем же исходом. Обычно копятся из-за интенсивного
+            SELECT ... FOR SHARE или внешних ключей.
+
+  # ===================================================================
+  # РЕСТАРТ БАЗЫ
+  # ===================================================================
+  - name: postgres.postmaster
+    rules:
+
+      - alert: PostgresRestarted
+        expr: time() - pg_postmaster_start_time_seconds < 300
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres перезапускался ({{ $labels.pg_instance }})"
+          description: >-
+            Аптайм меньше 5 минут. Если рестарт незапланированный —
+            смотри логи базы на /pg_log: OOM, аварийное завершение или
+            остановка по wraparound.
+
+  # ===================================================================
+  # ВАКУУМ И РАСПУХАНИЕ
+  # ===================================================================
+  - name: postgres.vacuum
+    rules:
+
+      - alert: PostgresDeadTuplesHigh
+        expr: pg_stat_user_tables_n_dead_tup > 100000
+              and pg_stat_user_tables_n_dead_tup
+                  / clamp_min(pg_stat_user_tables_n_live_tup, 1) > 0.2
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.schemaname }}.{{ $labels.relname }}: {{ $value }} мёртвых строк"
+          description: >-
+            Мёртвых строк больше 20% от живых и больше 100 тысяч.
+            Автовакуум не справляется: таблица распухает, планы портятся,
+            место на /data_db уходит.
+
+      # last_autovacuum приходит unix-таймстампом, и 0 означает
+      # «никогда». Без отсечки нуля time() - 0 даёт полвека, и алерт
+      # срабатывал бы на каждой новорождённой таблице.
+      - alert: PostgresVacuumStale
+        expr: pg_stat_user_tables_last_autovacuum > 0
+              and time() - pg_stat_user_tables_last_autovacuum > 604800
+              and pg_stat_user_tables_n_dead_tup > 100000
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.schemaname }}.{{ $labels.relname }} не вакуумилась неделю"
+          description: >-
+            При этом в ней больше 100 тысяч мёртвых строк. Проверь
+            настройки автовакуума для таблицы и нет ли долгой
+            транзакции, которая ему мешает.
+
+  # ===================================================================
+  # СЛОТЫ РЕПЛИКАЦИИ
+  # ===================================================================
+  - name: postgres.slots
+    rules:
+
+      # Брошенный слот молча съедает /mwal: пока слот существует,
+      # Postgres обязан хранить весь WAL с его restart_lsn.
+      #
+      # ОГОВОРКА: у слота, которым НИ РАЗУ не пользовались, метрика
+      # pg_wal_lsn_diff отдаёт NaN (проверено), и этот алерт его не
+      # поймает. Опасный случай — слот работал, потом потребитель умер —
+      # отслеживается нормально. Последствия любого варианта в любом
+      # случае ловит PostgresDiskLow по /mwal.
+      - alert: PostgresInactiveReplicationSlot
+        expr: pg_replication_slots_active == 0
+              and pg_replication_slots_pg_wal_lsn_diff > 1073741824
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Брошенный слот {{ $labels.slot_name }} держит {{ $value | humanize1024 }}B WAL"
+          description: >-
+            Слот неактивен, но не даёт удалить WAL. /mwal будет расти,
+            пока не кончится, и тогда база встанет. Либо поднять
+            потребителя, либо удалить слот:
+            SELECT pg_drop_replication_slot('{{ $labels.slot_name }}');
+
+  # ===================================================================
+  # МЕДЛЕННЫЕ ЗАПРОСЫ
+  # ===================================================================
+  - name: postgres.statements
+    rules:
+
+      # Экспортёр отдаёт только накопленные суммы, среднее считаем сами.
+      # clamp_min в знаменателе тут УМЕСТЕН, в отличие от cache hit:
+      # запрос без вызовов за окно просто не должен попадать в алерт,
+      # и ноль в числителе даёт ноль, а не ложное срабатывание.
+      - record: pg:statement:mean_seconds
+        expr: |
+          rate(pg_stat_statements_seconds_total[15m])
+          / clamp_min(rate(pg_stat_statements_calls_total[15m]), 0.0001)
+
+      - alert: PostgresSlowQuery
+        expr: pg:statement:mean_seconds > 1
+              and rate(pg_stat_statements_calls_total[15m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Запрос queryid={{ $labels.queryid }} в среднем {{ $value | humanizeDuration }}"
+          description: >-
+            База {{ $labels.datname }}, пользователь {{ $labels.user }}.
+            Текста запроса в метриках НЕТ — экспортёр отдаёт только
+            queryid. Чтобы увидеть сам запрос:
+            SELECT query FROM pg_stat_statements WHERE queryid = {{ $labels.queryid }};

@@ -1,16 +1,8 @@
 # =====================================================================
 # Prometheus для мониторинга удалённого Postgres.
 #
-# Три цели:
-#   postgres-exporter  9187  — уже стоит на хосте БД (админы)
-#   node-exporter      9100  — уже стоит на хосте БД (админы)
-#   pg-probe           9899  — наш пробер, на ЭТОЙ машине рядом с Prometheus
-#
-# Пробер намеренно живёт не на хосте БД: он меряет путь до базы с нашей
-# стороны. Стоящий на самом хосте экспортёр этого увидеть не может.
-#
-# Если Prometheus у вас уже есть — целиком этот файл не нужен, перенесите
-# к себе только блоки scrape_configs и rule_files.
+# Если Prometheus у вас уже есть — целиком этот файл не нужен,
+# перенесите к себе только scrape_configs и rule_files.
 # =====================================================================
 
 global:
@@ -21,20 +13,29 @@ global:
     monitor: postgres
 
 rule_files:
+  # Базовый набор: работает с postgres_exporter 0.17.1 и node_exporter
+  # в конфигурации по умолчанию. Ничего включать не нужно.
   - rules/*.yml
+
+  # Дополнительные наборы подключать ТОЛЬКО после того, как появятся
+  # нужные метрики, иначе правила молча никогда не сработают.
+  # Проверить: python3 tools/check_targets.py
+  #
+  # После включения коллекторов экспортёра
+  # (--collector.database_wraparound, --collector.postmaster,
+  #  --collector.replication_slot, --collector.stat_statements):
+  # - rules/optional/postgres.alerts-collectors.yml
+  #
+  # Если запущен пробер (windows/Install-PgProbe.ps1):
+  # - rules/optional/postgres.alerts-probe.yml
 
 scrape_configs:
 
   # -------------------------------------------------------------------
-  # ВАЖНО: метка pg_instance должна быть ОДИНАКОВОЙ во всех трёх job.
-  #
-  # По ней связываются метрики разных источников. Например,
-  # PostgresUnreachable сопоставляет pgprobe_up от пробера с pg_up от
-  # экспортёра через on (pg_instance) — при разных значениях он просто
-  # никогда не сработает, молча.
-  #
-  # Prometheus не подставляет переменные окружения в этот файл, так что
-  # адреса и имя правьте руками.
+  # ВАЖНО: метка pg_instance должна быть ОДИНАКОВОЙ во всех job.
+  # По ней дашборд и правила связывают метрики из разных источников.
+  # Prometheus не подставляет переменные окружения в этот файл —
+  # адреса правьте руками.
   # -------------------------------------------------------------------
 
   - job_name: postgres-exporter
@@ -42,14 +43,10 @@ scrape_configs:
       - targets: ["ЗАМЕНИТЬ-НА-АДРЕС-ХОСТА-БД:9187"]
         labels:
           pg_instance: "prod-postgres"
-    # Если админы включили basic auth — раскомментировать:
+    # Если на экспортёре включён basic auth:
     # basic_auth:
     #   username: prometheus
     #   password_file: /etc/prometheus/exporter_password
-    # Если включили TLS с самоподписанным сертификатом:
-    # scheme: https
-    # tls_config:
-    #   ca_file: /etc/prometheus/exporter_ca.pem
 
   - job_name: node-exporter
     static_configs:
@@ -57,13 +54,15 @@ scrape_configs:
         labels:
           pg_instance: "prod-postgres"
 
-  - job_name: pg-probe
-    static_configs:
-      - targets: ["127.0.0.1:9899"]
-        labels:
-          pg_instance: "prod-postgres"
+  # Пробер — ОПЦИОНАЛЬНО, только если разворачивали его отдельно.
+  # Он единственный меряет время отклика: экспортёр живёт на хосте БД
+  # и путь по сети не видит по определению.
+  # - job_name: pg-probe
+  #   static_configs:
+  #     - targets: ["127.0.0.1:9899"]
+  #       labels:
+  #         pg_instance: "prod-postgres"
 
-  # Сам Prometheus — чтобы заметить, если мониторинг сломался.
   - job_name: prometheus
     static_configs:
       - targets: ["127.0.0.1:9090"]
