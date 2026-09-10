@@ -1,0 +1,113 @@
+# =====================================================================
+# Recording rules — предпосчитанные выражения.
+#
+# Источники метрик:
+#   pg_*      — стоковый postgres_exporter на хосте БД (порт 9187)
+#   node_*    — node_exporter на хосте БД (порт 9100)
+#   pgprobe_* — наш пробер, рядом с Prometheus (время отклика + то,
+#               чего стоковый экспортёр не отдаёт)
+#
+# Соглашение об именах: уровень:метрика:операция
+# =====================================================================
+groups:
+  - name: postgres.recording
+    interval: 30s
+    rules:
+
+      # --- насыщение по коннектам ---------------------------------
+      # pg_stat_activity_count разбит по datname/state/usename,
+      # поэтому суммируем; max_connections — одно на кластер.
+      - record: pg:connections:used
+        expr: |
+          sum by (pg_instance) (pg_stat_activity_count)
+
+      - record: pg:connections:utilization
+        expr: |
+          sum by (pg_instance) (pg_stat_activity_count)
+          /
+          max by (pg_instance) (pg_settings_max_connections)
+
+      # --- время отклика, перцентили ------------------------------
+      # session_ping — чистая отзывчивость сервера (соединение уже есть)
+      - record: pg:session_ping:p95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (pg_instance, le) (rate(pgprobe_session_ping_seconds_bucket[5m]))
+          )
+
+      - record: pg:session_ping:p99
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (pg_instance, le) (rate(pgprobe_session_ping_seconds_bucket[5m]))
+          )
+
+      # connect — стоимость установки соединения (сеть + TLS + авторизация)
+      - record: pg:connect:p95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (pg_instance, le) (rate(pgprobe_connect_seconds_bucket[5m]))
+          )
+
+      # tcp_connect — только сеть, Postgres не участвует
+      - record: pg:tcp_connect:p95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (pg_instance, le) (rate(pgprobe_tcp_connect_seconds_bucket[5m]))
+          )
+
+      # --- эффективность ------------------------------------------
+      # Считается по rate(), а не по накопленной сумме: иначе значение
+      # намертво определялось бы историей с момента запуска базы.
+      #
+      # Деление НАМЕРЕННО без clamp_min. На простаивающей базе оба
+      # счётчика стоят, 0/0 даёт NaN — и это правильный ответ:
+      # "трафика не было, отношение не определено". Подставь туда
+      # единицу — получился бы ровный ноль, неотличимый от катастрофы,
+      # и алерт "< 95%" будил бы всю ночь на пустой базе. NaN не
+      # проходит сравнение, поэтому алерт молчит сам собой, а на
+      # графике честно выходит разрыв вместо выдуманного нуля.
+      - record: pg:cache:hit_ratio
+        expr: |
+          sum by (pg_instance) (rate(pg_stat_database_blks_hit[15m]))
+          /
+          (
+            sum by (pg_instance) (rate(pg_stat_database_blks_hit[15m]))
+            + sum by (pg_instance) (rate(pg_stat_database_blks_read[15m]))
+          )
+
+      - record: pg:transactions:rollback_ratio
+        expr: |
+          sum by (pg_instance) (rate(pg_stat_database_xact_rollback[15m]))
+          /
+          (
+            sum by (pg_instance) (rate(pg_stat_database_xact_commit[15m]))
+            + sum by (pg_instance) (rate(pg_stat_database_xact_rollback[15m]))
+          )
+
+      # Транзакций в секунду — основной показатель нагрузки.
+      - record: pg:transactions:rate
+        expr: |
+          sum by (pg_instance) (rate(pg_stat_database_xact_commit[5m]))
+          + sum by (pg_instance) (rate(pg_stat_database_xact_rollback[5m]))
+
+      # --- приближение к аварийной остановке по wraparound ---------
+      # Из пробера: стоковый экспортёр age(datfrozenxid) не отдаёт.
+      # 1.0 означает, что autovacuum уже обязан идти принудительно.
+      - record: pg:wraparound:ratio
+        expr: |
+          pgprobe_xid_age / on (pg_instance) group_left pgprobe_xid_age_limit
+
+      # --- диск на хосте БД ---------------------------------------
+      # Доступно только благодаря node_exporter: изнутри Postgres
+      # свободное место на файловой системе не видно в принципе.
+      - record: host:filesystem:used_ratio
+        expr: |
+          1 - (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|devtmpfs|overlay|squashfs"}
+            /
+            node_filesystem_size_bytes{fstype!~"tmpfs|devtmpfs|overlay|squashfs"}
+          )

@@ -1,0 +1,69 @@
+# =====================================================================
+# Prometheus для мониторинга удалённого Postgres.
+#
+# Три цели:
+#   postgres-exporter  9187  — уже стоит на хосте БД (админы)
+#   node-exporter      9100  — уже стоит на хосте БД (админы)
+#   pg-probe           9899  — наш пробер, на ЭТОЙ машине рядом с Prometheus
+#
+# Пробер намеренно живёт не на хосте БД: он меряет путь до базы с нашей
+# стороны. Стоящий на самом хосте экспортёр этого увидеть не может.
+#
+# Если Prometheus у вас уже есть — целиком этот файл не нужен, перенесите
+# к себе только блоки scrape_configs и rule_files.
+# =====================================================================
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s        # обязан быть меньше scrape_interval
+  evaluation_interval: 15s
+  external_labels:
+    monitor: postgres
+
+rule_files:
+  - rules/*.yml
+
+scrape_configs:
+
+  # -------------------------------------------------------------------
+  # ВАЖНО: метка pg_instance должна быть ОДИНАКОВОЙ во всех трёх job.
+  #
+  # По ней связываются метрики разных источников. Например,
+  # PostgresUnreachable сопоставляет pgprobe_up от пробера с pg_up от
+  # экспортёра через on (pg_instance) — при разных значениях он просто
+  # никогда не сработает, молча.
+  #
+  # Prometheus не подставляет переменные окружения в этот файл, так что
+  # адреса и имя правьте руками.
+  # -------------------------------------------------------------------
+
+  - job_name: postgres-exporter
+    static_configs:
+      - targets: ["ЗАМЕНИТЬ-НА-АДРЕС-ХОСТА-БД:9187"]
+        labels:
+          pg_instance: "prod-postgres"
+    # Если админы включили basic auth — раскомментировать:
+    # basic_auth:
+    #   username: prometheus
+    #   password_file: /etc/prometheus/exporter_password
+    # Если включили TLS с самоподписанным сертификатом:
+    # scheme: https
+    # tls_config:
+    #   ca_file: /etc/prometheus/exporter_ca.pem
+
+  - job_name: node-exporter
+    static_configs:
+      - targets: ["ЗАМЕНИТЬ-НА-АДРЕС-ХОСТА-БД:9100"]
+        labels:
+          pg_instance: "prod-postgres"
+
+  - job_name: pg-probe
+    static_configs:
+      - targets: ["127.0.0.1:9899"]
+        labels:
+          pg_instance: "prod-postgres"
+
+  # Сам Prometheus — чтобы заметить, если мониторинг сломался.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["127.0.0.1:9090"]

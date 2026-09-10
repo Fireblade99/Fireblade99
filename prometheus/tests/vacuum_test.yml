@@ -1,0 +1,50 @@
+# =====================================================================
+# Тесты алертов по вакууму — ОТДЕЛЬНЫМ файлом.
+#
+#   promtool test rules prometheus/tests/vacuum_test.yml
+#
+# Почему отдельно: порог «не вакуумилась неделю» требует горизонта в
+# 7+ суток. При шаге вычислений 30 секунд (как в основном файле) это
+# сотни тысяч циклов, а при редких входных образцах они ещё и
+# протухают между вычислениями — staleness в Prometheus 5 минут, и
+# условие `for` просто не набирается. Здесь шаг 5 минут, и то и другое
+# решается разом.
+# =====================================================================
+
+rule_files:
+  - ../rules/postgres.recording.yml
+  - ../rules/postgres.alerts.yml
+
+evaluation_interval: 5m
+
+tests:
+
+  # Регрессия. last_autovacuum приходит unix-таймстампом, и 0 означает
+  # «никогда». Без отсечки нуля time() - 0 даёт полвека, и алерт
+  # срабатывал бы на каждой новорождённой таблице.
+  - interval: 5m
+    name: "таблица не вакуумилась НИКОГДА (0) -> ложного алерта нет"
+    input_series:
+      - series: 'pg_stat_user_tables_last_autovacuum{datname="appdb",schemaname="public",relname="fresh",pg_instance="db1",job="postgres-exporter"}'
+        values: "0+0x2400"
+      - series: 'pg_stat_user_tables_n_dead_tup{datname="appdb",schemaname="public",relname="fresh",pg_instance="db1",job="postgres-exporter"}'
+        values: "200000+0x2400"
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="PostgresVacuumStale",alertstate="firing"}'
+        eval_time: 180h
+        exp_samples: []
+
+  - interval: 5m
+    name: "таблица не вакуумилась неделю -> PostgresVacuumStale"
+    input_series:
+      # вакуум был на 1-й секунде эпохи, смотрим на 180-м часу
+      - series: 'pg_stat_user_tables_last_autovacuum{datname="appdb",schemaname="public",relname="orders",pg_instance="db1",job="postgres-exporter"}'
+        values: "1+0x2400"
+      - series: 'pg_stat_user_tables_n_dead_tup{datname="appdb",schemaname="public",relname="orders",pg_instance="db1",job="postgres-exporter"}'
+        values: "200000+0x2400"
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="PostgresVacuumStale",alertstate="firing"}'
+        eval_time: 180h
+        exp_samples:
+          - labels: 'ALERTS{alertname="PostgresVacuumStale", alertstate="firing", datname="appdb", job="postgres-exporter", pg_instance="db1", relname="orders", schemaname="public", severity="warning"}'
+            value: 1

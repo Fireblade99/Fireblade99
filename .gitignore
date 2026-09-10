@@ -1,0 +1,13 @@
+# Учётные данные — никогда в репозиторий
+.env
+*.pem
+*.key
+
+# Данные Prometheus
+prometheus_data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/

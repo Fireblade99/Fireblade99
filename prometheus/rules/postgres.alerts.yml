@@ -1,0 +1,526 @@
+# =====================================================================
+# Алерты по Postgres.
+#
+# Куда слать — настраивается отдельно (Alertmanager или Grafana ->
+# Alerting -> Contact points). Здесь только УСЛОВИЯ.
+#
+# severity:
+#   critical — деградация или отказ прямо сейчас, будить ночью
+#   warning  — тенденция, разбираться в рабочее время
+#
+# Пороги ниже — разумная отправная точка, а не истина: подгоняй под
+# свою базу. Каждый подписан в аннотации.
+#
+# `for` не для красоты: без него одиночный сетевой чих даст ложную
+# побудку. Значения подобраны так, чтобы алерт пережил один-два
+# неудачных скрейпа.
+# =====================================================================
+groups:
+
+  # ===================================================================
+  # ДОСТУПНОСТЬ
+  # ===================================================================
+  - name: postgres.availability
+    rules:
+
+      # Два независимых наблюдателя: pg_up — это экспортёр НА хосте БД
+      # (ходит в базу через localhost), pgprobe_up — наш пробер отсюда.
+      # Их расхождение само по себе диагноз, см. PostgresUnreachable.
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Postgres не отвечает даже локально ({{ $labels.pg_instance }})"
+          description: >-
+            Экспортёр работает на самом хосте БД и не может подключиться
+            к Postgres через localhost. Значит проблема в самой базе,
+            а не в сети до неё.
+
+      # Экспортёр на хосте базу видит, а мы — нет. Классическая сетевая
+      # авария: файрвол, маршрут, DNS. База при этом жива и обслуживает
+      # тех, кто ближе.
+      - alert: PostgresUnreachable
+        expr: pgprobe_up == 0 and on (pg_instance) pg_up == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "База жива, но недоступна отсюда ({{ $labels.pg_instance }})"
+          description: >-
+            Экспортёр на хосте БД подключается к Postgres успешно, а наш
+            пробер — нет. Это проблема сети между мониторингом и базой,
+            не проблема базы. Точная причина в
+            pgprobe_failures_total{reason}: network, dns, timeout, tls.
+
+      # Пробер не смог, и экспортёра тоже не видно — скорее всего лежит
+      # весь хост целиком, а не только Postgres.
+      - alert: PostgresHostDown
+        expr: pgprobe_up == 0 and on (pg_instance) up{job="postgres-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Хост БД не отвечает целиком ({{ $labels.pg_instance }})"
+          description: >-
+            Ни база, ни экспортёр на её хосте не отвечают: Prometheus не
+            может опросить порт 9187, наш пробер не может подключиться к
+            Postgres. Похоже на отказ всей машины или сегмента сети.
+
+      # Ловит зависший пробер, а не упавшую базу: метрика на месте,
+      # но давно не обновлялась.
+      - alert: PostgresProbeStale
+        expr: time() - pgprobe_last_success_timestamp_seconds > 600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "10 минут нет ни одной успешной проверки ({{ $labels.pg_instance }})"
+          description: >-
+            Последняя успешная проверка была
+            {{ $value | humanizeDuration }} назад. Либо база недоступна
+            всё это время, либо завис сам пробер — проверь оба.
+
+      # Аптайм берётся из пробера: стоковый экспортёр отдаёт только
+      # process_start_time_seconds самого себя, по нему рестарт базы
+      # не увидеть.
+      - alert: PostgresRestarted
+        expr: pgprobe_postmaster_uptime_seconds < 300
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres перезапускался ({{ $labels.pg_instance }})"
+          description: >-
+            Аптайм всего {{ $value | humanizeDuration }}. Если рестарт
+            незапланированный — смотри логи базы: OOM, аварийное
+            завершение или остановка по wraparound.
+
+      # Мониторинг, который молча умер, хуже отсутствующего.
+      - alert: MonitoringTargetDown
+        expr: up{job=~"pg-probe|postgres-exporter|node-exporter"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Сборщик метрик не отвечает: {{ $labels.job }}"
+          description: >-
+            Prometheus не может опросить {{ $labels.instance }}.
+            Пока это так, часть алертов по базе слепа.
+
+  # ===================================================================
+  # ВРЕМЯ ОТКЛИКА (только из пробера — изнутри базы это не измерить)
+  # ===================================================================
+  - name: postgres.latency
+    rules:
+
+      # session_ping — SELECT 1 по уже открытому соединению. Порог
+      # 250 мс для такого запроса означает, что серверу плохо: сам
+      # запрос не делает ничего.
+      - alert: PostgresSlowResponse
+        expr: pg:session_ping:p95 > 0.25
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres отвечает медленно: p95 {{ $value | humanizeDuration }}"
+          description: >-
+            95-й перцентиль SELECT 1 по готовому соединению выше 250 мс.
+            Запрос тривиальный, дело не в нём: смотри нагрузку,
+            блокировки (pgprobe_blocked_sessions) и насыщение по коннектам.
+
+      - alert: PostgresVerySlowResponse
+        expr: pg:session_ping:p95 > 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Postgres почти не отвечает: p95 {{ $value | humanizeDuration }}"
+          description: >-
+            SELECT 1 занимает больше секунды. Формально база жива, но
+            для приложения это уже отказ.
+
+      # Подключаться долго, а работать быстро — проблема не в сервере,
+      # а в установке соединения. Второе условие отсекает случай
+      # "всё медленно", который ловится алертами выше.
+      - alert: PostgresSlowConnect
+        expr: pg:connect:p95 > 1 and pg:session_ping:p95 < 0.25
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Долгая установка соединения при здоровом сервере"
+          description: >-
+            Подключение занимает {{ $value | humanizeDuration }}, при
+            этом уже открытые соединения работают быстро. Типичное:
+            заканчиваются слоты max_connections, дорогой TLS-хендшейк,
+            тормозящий DNS, отсутствие пула на стороне приложения.
+
+      # Отделяет медленную сеть от медленной базы: TCP-хендшейк
+      # Postgres вообще не касается.
+      - alert: PostgresNetworkSlow
+        expr: pg:tcp_connect:p95 > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Медленная сеть до базы: TCP-хендшейк {{ $value | humanizeDuration }}"
+          description: >-
+            Открытие сокета до хоста БД занимает больше 500 мс.
+            Postgres тут ни при чём — это канал между мониторингом и базой.
+
+      # Из пробера: коллектор pg_stat_statements в стоковом экспортёре
+      # по умолчанию выключен.
+      - alert: PostgresSlowQuery
+        expr: pgprobe_statement_mean_time_ms > 1000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Запрос в среднем дольше секунды (queryid {{ $labels.queryid }})"
+          description: >-
+            Среднее время {{ $value }} мс. Запрос: {{ $labels.query }}
+
+  # ===================================================================
+  # НАСЫЩЕНИЕ
+  # ===================================================================
+  - name: postgres.saturation
+    rules:
+
+      - alert: PostgresConnectionsHigh
+        expr: pg:connections:utilization > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Занято {{ $value | humanizePercentage }} слотов подключений"
+          description: >-
+            Приближаемся к max_connections. Когда слоты кончатся, новые
+            клиенты начнут получать отказ — база при этом будет «жива»
+            и обычный хелсчек ничего не заметит.
+
+      - alert: PostgresConnectionsCritical
+        expr: pg:connections:utilization > 0.9
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Слоты подключений почти кончились: {{ $value | humanizePercentage }}"
+          description: >-
+            Осталось меньше 10% от max_connections. Дальше — отказы в
+            подключении. Срочно: найти источник (pg_stat_activity_count
+            разбит по usename и application_name) и либо погасить лишние
+            сессии, либо поднять пул.
+
+      # Классический баг приложения: транзакция открыта и забыта. Такая
+      # сессия держит снимок данных и блокирует очистку мёртвых строк
+      # ВО ВСЕЙ базе, не только в своей таблице.
+      - alert: PostgresIdleInTransaction
+        expr: pg_stat_activity_max_tx_duration{state="idle in transaction"} > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Сессия висит в idle in transaction {{ $value | humanizeDuration }}"
+          description: >-
+            Приложение {{ $labels.application_name }} (пользователь
+            {{ $labels.usename }}) открыло транзакцию и не закрыло её.
+            Это блокирует autovacuum по всей базе. Найти:
+            SELECT pid, usename, state_change, query FROM pg_stat_activity
+            WHERE state = 'idle in transaction' ORDER BY state_change;
+
+      - alert: PostgresLongTransaction
+        expr: max by (pg_instance, datname) (pg_stat_activity_max_tx_duration) > 3600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Транзакция в {{ $labels.datname }} открыта больше часа"
+          description: >-
+            {{ $value | humanizeDuration }}. Долгая транзакция удерживает
+            старые версии строк и не даёт вакууму работать. Если это
+            регулярный отчёт — вынеси его на реплику.
+
+      # Из пробера: pg_locks_count в стоке разбит по mode, но не по
+      # granted, поэтому «кто-то кого-то ждёт» оттуда не достать.
+      - alert: PostgresBlockedSessions
+        expr: pgprobe_blocked_sessions > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} сессий ждут снятия блокировки"
+          description: >-
+            Кто-то кого-то блокирует уже 5 минут. Разбор:
+            SELECT blocked.pid AS blocked_pid, blocking.pid AS blocking_pid
+            FROM pg_locks blocked
+            JOIN pg_locks blocking ON blocking.transactionid = blocked.transactionid
+                 AND blocking.granted
+            WHERE NOT blocked.granted;
+
+  # ===================================================================
+  # ТИХИЕ УБИЙЦЫ — копится незаметно, роняет разом
+  # ===================================================================
+  - name: postgres.integrity
+    rules:
+
+      # На 2 млрд транзакций Postgres останавливает приём записи. Это
+      # не деградация, а полная остановка, и чинится долгим VACUUM
+      # FREEZE в оффлайне. Ловить надо сильно заранее.
+      # Стоковый экспортёр эту метрику не отдаёт — берём из пробера.
+      - alert: PostgresXidWraparoundApproaching
+        expr: pg:wraparound:ratio > 0.75
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Возраст транзакций базы {{ $labels.datname }} — {{ $value | humanizePercentage }} от порога"
+          description: >-
+            age(datfrozenxid) подбирается к autovacuum_freeze_max_age.
+            Обычно значит, что автовакуум не справляется или ему мешает
+            долгая транзакция либо брошенный слот репликации.
+
+      - alert: PostgresXidWraparoundCritical
+        expr: pgprobe_xid_age > 1000000000
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Wraparound: база {{ $labels.datname }}, возраст {{ $value }} транзакций"
+          description: >-
+            До аварийной остановки записи осталось меньше половины
+            запаса (лимит — 2 млрд). Нужен VACUUM (FREEZE) по самым
+            старым таблицам и устранение того, что мешает автовакууму.
+
+      # Брошенный слот молча съедает диск: Postgres обязан хранить весь
+      # WAL от restart_lsn, пока слот существует.
+      #
+      # ОГОВОРКА: у слота, которым ни разу не пользовались, стоковая
+      # метрика даёт NaN, и алерт его не поймает. Опасный случай
+      # (слот работал, потом потребитель умер) отслеживается корректно,
+      # а последствия любого варианта ловит алерт на диск ниже.
+      - alert: PostgresInactiveReplicationSlot
+        expr: pg_replication_slots_active == 0
+              and pg_replication_slots_pg_wal_lsn_diff > 1073741824
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Брошенный слот {{ $labels.slot_name }} держит {{ $value | humanize1024 }}B WAL"
+          description: >-
+            Слот неактивен, но не даёт удалить WAL. Диск будет расти,
+            пока не кончится, и тогда база встанет. Либо поднять
+            потребителя, либо удалить слот:
+            SELECT pg_drop_replication_slot('{{ $labels.slot_name }}');
+
+      - alert: PostgresReplicationLag
+        expr: pg_replication_lag_seconds > 60
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Реплика отстаёт на {{ $value | humanizeDuration }}"
+          description: >-
+            Если с этой реплики читают — читают устаревшие данные. Если
+            она резервная — окно потери данных при аварии равно этому
+            отставанию.
+
+      - alert: PostgresWALGrowing
+        expr: pg_wal_size_bytes > 10737418240
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Каталог WAL раздулся до {{ $value | humanize1024 }}B"
+          description: >-
+            Порог 10 ГБ — подгони под свой max_wal_size. Растущий WAL
+            при живой базе почти всегда означает застрявший слот
+            репликации или сломанный archive_command.
+
+      # Сломанный archive_command копит WAL так же, как брошенный слот.
+      - alert: PostgresArchiverFailing
+        expr: increase(pg_stat_archiver_failed_count[1h]) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Архивация WAL падает ({{ $value }} ошибок за час)"
+          description: >-
+            archive_command возвращает ошибку. Postgres будет копить
+            неархивированный WAL на диске, пока команда не заработает.
+
+  # ===================================================================
+  # ДИСК И ХОСТ — доступно благодаря node_exporter.
+  # Изнутри Postgres свободное место не видно в принципе, а
+  # переполнение тома останавливает запись мгновенно.
+  # ===================================================================
+  - name: postgres.host
+    rules:
+
+      - alert: DiskSpaceLow
+        expr: host:filesystem:used_ratio > 0.85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Диск {{ $labels.mountpoint }} занят на {{ $value | humanizePercentage }}"
+          description: >-
+            Осталось меньше 15%. Для тома с данными Postgres это уже
+            повод разбираться: WAL, распухшие таблицы, старые бэкапы.
+
+      - alert: DiskSpaceCritical
+        expr: host:filesystem:used_ratio > 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Диск {{ $labels.mountpoint }} занят на {{ $value | humanizePercentage }}"
+          description: >-
+            Меньше 5% свободного. При заполнении тома Postgres
+            прекращает приём записи — это не деградация, а остановка.
+
+      # Предсказание важнее факта: место кончается предсказуемо, и
+      # предупреждение за сутки даёт время среагировать по-человечески.
+      # Второе условие гасит ложные срабатывания на почти пустом диске,
+      # где линейный тренд шумит.
+      - alert: DiskWillFillIn24h
+        expr: |
+          predict_linear(
+            node_filesystem_avail_bytes{fstype!~"tmpfs|devtmpfs|overlay|squashfs"}[6h],
+            24 * 3600
+          ) < 0
+          and host:filesystem:used_ratio > 0.6
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Диск {{ $labels.mountpoint }} кончится в ближайшие сутки"
+          description: >-
+            По тренду за последние 6 часов свободное место на
+            {{ $labels.mountpoint }} закончится менее чем за 24 часа.
+            Это предупреждение заранее — реагировать можно спокойно,
+            не ночью по факту остановки базы.
+
+      - alert: HostMemoryLow
+        expr: |
+          node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "На хосте БД осталось {{ $value | humanizePercentage }} памяти"
+          description: >-
+            Мало доступной памяти. Postgres при нехватке начнёт активнее
+            ходить на диск, а в худшем случае OOM killer прибьёт backend
+            и база уйдёт в аварийное восстановление.
+
+      - alert: HostHighIOWait
+        expr: |
+          avg by (pg_instance, instance) (rate(node_cpu_seconds_total{mode="iowait"}[10m])) > 0.25
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Хост БД четверть времени ждёт диск ({{ $value | humanizePercentage }} iowait)"
+          description: >-
+            Высокий iowait означает, что диск не успевает за нагрузкой.
+            Сопоставь с pg:session_ping:p95 — если отклик тоже вырос,
+            причина найдена.
+
+  # ===================================================================
+  # ЭФФЕКТИВНОСТЬ — не аварии, но отсюда растут будущие
+  # ===================================================================
+  - name: postgres.efficiency
+    rules:
+
+      - alert: PostgresLowCacheHitRatio
+        expr: pg:cache:hit_ratio < 0.95
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Попаданий в кэш только {{ $value | humanizePercentage }}"
+          description: >-
+            Меньше 95% — база регулярно ходит мимо shared buffers. Либо
+            мало shared_buffers, либо рабочий набор перерос память, либо
+            кто-то делает полные сканы вместо индексных.
+
+      - alert: PostgresHighRollbackRatio
+        expr: pg:transactions:rollback_ratio > 0.1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Откатывается {{ $value | humanizePercentage }} транзакций"
+          description: >-
+            Каждая десятая транзакция завершается откатом. Обычно ошибки
+            в приложении, реже — нарушения ограничений или таймауты.
+
+      - alert: PostgresDeadlocks
+        expr: increase(pg_stat_database_deadlocks[30m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Взаимоблокировки в базе {{ $labels.datname }}: {{ $value }} за 30 минут"
+          description: >-
+            Postgres разорвал взаимоблокировку, убив одну из транзакций.
+            Для приложения это потерянная работа. Смотри в логе базы,
+            какие запросы столкнулись.
+
+      # Временные файлы = запросу не хватило work_mem и он пошёл
+      # сортировать на диск. Это на порядки медленнее.
+      - alert: PostgresTempFileSpike
+        expr: rate(pg_stat_database_temp_bytes[30m]) > 10485760
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Запись во временные файлы {{ $value | humanize1024 }}B/с в базе {{ $labels.datname }}"
+          description: >-
+            Запросам не хватает work_mem, сортировки и хэши уходят на
+            диск. Либо поднять work_mem, либо чинить сами запросы.
+
+      - alert: PostgresDeadTuplesHigh
+        expr: pg_stat_user_tables_n_dead_tup > 100000
+              and pg_stat_user_tables_n_dead_tup
+                  / clamp_min(pg_stat_user_tables_n_live_tup, 1) > 0.2
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Таблица {{ $labels.schemaname }}.{{ $labels.relname }}: {{ $value }} мёртвых строк"
+          description: >-
+            Мёртвых строк больше 20% от живых и больше 100 тысяч.
+            Автовакуум не справляется: таблица распухает, планы портятся.
+
+      # last_autovacuum приходит unix-таймстампом, ноль означает
+      # "не вакуумилась никогда". Без отсечки нуля time() - 0 дало бы
+      # 56 лет и алерт сработал бы на каждой новой таблице.
+      - alert: PostgresVacuumStale
+        expr: pg_stat_user_tables_last_autovacuum > 0
+              and time() - pg_stat_user_tables_last_autovacuum > 604800
+              and pg_stat_user_tables_n_dead_tup > 100000
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.schemaname }}.{{ $labels.relname }} не вакуумилась неделю"
+          description: >-
+            При этом в ней больше 100 тысяч мёртвых строк. Проверь
+            настройки автовакуума для таблицы и нет ли долгой
+            транзакции, которая ему мешает.
+
+      # Досрочные чекпоинты — признак, что база не успевает за записью.
+      - alert: PostgresForcedCheckpoints
+        expr: rate(pg_stat_bgwriter_checkpoints_req_total[1h])
+              > rate(pg_stat_bgwriter_checkpoints_timed_total[1h])
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Чекпоинты идут досрочно, по переполнению WAL"
+          description: >-
+            Досрочных чекпоинтов больше, чем плановых: max_wal_size мал
+            для текущей нагрузки на запись. Следствие — всплески
+            дисковой записи и просадки времени отклика.
