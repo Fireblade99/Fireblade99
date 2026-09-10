@@ -33,10 +33,11 @@
         },
         "query": "label_values(pg_up, pg_instance)",
         "label": "База",
-        "refresh": 1,
+        "refresh": 2,
         "sort": 1,
         "current": {},
-        "includeAll": false
+        "includeAll": false,
+        "description": "Список берётся из меток Prometheus за выбранный период. После переименования хоста старое имя исчезнет отсюда, как только выйдет за границу окна."
       }
     ]
   },
