@@ -100,7 +100,7 @@ $rules = @(
     @{
         title = 'Postgres: база не отвечает'
         expr  = 'pg_up'
-        op    = 'lt'; threshold = 1; for = '2m'; severity = 'critical'
+        op    = 'lt'; threshold = 1; for = '10s'; severity = 'critical'
         noData = 'OK'
         summary = 'Postgres не отвечает: {{ $labels.pg_instance }}'
         description = 'Экспортёр работает на самом хосте БД и ходит в Postgres через localhost. Раз он не может подключиться, проблема в базе, а не в сети до неё.'
@@ -108,7 +108,7 @@ $rules = @(
     @{
         title = 'Postgres: слоты подключений на исходе'
         expr  = 'sum by (pg_instance) (pg_stat_activity_count) / max by (pg_instance) (pg_settings_max_connections) * 100'
-        op    = 'gt'; threshold = 90; for = '5m'; severity = 'critical'
+        op    = 'gt'; threshold = 90; for = '1m'; severity = 'critical'
         noData = 'OK'
         summary = 'Занято {{ $values.B }}% слотов на {{ $labels.pg_instance }}'
         description = 'Осталось меньше 10% от max_connections. Дальше новые клиенты получают отказ, а база остаётся живой — правило "база не отвечает" при этом молчит. Кто занял, видно на дашборде в панели "Кто занимает подключения".'
@@ -116,7 +116,7 @@ $rules = @(
     @{
         title = 'Postgres: диск базы кончается'
         expr  = '(1 - node_filesystem_avail_bytes{mountpoint=~"/data_db|/mwal"} / node_filesystem_size_bytes{mountpoint=~"/data_db|/mwal"}) * 100'
-        op    = 'gt'; threshold = 85; for = '10m'; severity = 'critical'
+        op    = 'gt'; threshold = 85; for = '1m'; severity = 'critical'
         noData = 'OK'
         summary = '{{ $labels.mountpoint }} на {{ $labels.pg_instance }} занят на {{ $values.B }}%'
         description = 'Переполнение тома останавливает запись в Postgres мгновенно — это не деградация, а стоп. /data_db это данные, /mwal это WAL. Растущий /mwal при живой базе почти всегда означает застрявший слот репликации или сломанный archive_command.'
@@ -124,7 +124,7 @@ $rules = @(
     @{
         title = 'Postgres: транзакция висит больше часа'
         expr  = 'max by (pg_instance) (pg_stat_activity_max_tx_duration)'
-        op    = 'gt'; threshold = 3600; for = '5m'; severity = 'warning'
+        op    = 'gt'; threshold = 3600; for = '1m'; severity = 'warning'
         noData = 'OK'
         summary = 'Транзакция на {{ $labels.pg_instance }} открыта {{ $values.B }} секунд'
         description = 'Долгая транзакция удерживает старые версии строк и блокирует автовакуум по всей базе, а не только в своей таблице. Отсюда потом растут и распухание таблиц, и расход места на диске.'
@@ -132,7 +132,7 @@ $rules = @(
     @{
         title = 'Postgres: мониторинг ослеп'
         expr  = 'up{job=~"postgres-exporter|node-exporter"}'
-        op    = 'lt'; threshold = 1; for = '5m'; severity = 'warning'
+        op    = 'lt'; threshold = 1; for = '1m'; severity = 'warning'
         noData = 'Alerting'
         summary = 'Не отвечает сборщик метрик {{ $labels.job }} ({{ $labels.instance }})'
         description = 'Prometheus не может опросить экспортёр. Пока это так, остальные алерты по этой базе слепы, а молчание мониторинга неотличимо от "всё хорошо".'

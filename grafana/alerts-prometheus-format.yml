@@ -13,6 +13,14 @@
 #
 # Пороги подписаны у каждого правила. Это отправная точка, а не истина:
 # под свою нагрузку их надо будет подвинуть.
+#
+# ВАЖНО про `for`. Он не единственный таймер: у группы правил в Grafana
+# есть свой интервал вычисления, по умолчанию 1 минута. При for: 10s
+# алерт всё равно сработает не раньше следующего вычисления, то есть
+# примерно через минуту. Чтобы ловить действительно за секунды, надо
+# опустить и интервал вычисления группы (Evaluation group -> interval),
+# помня, что Prometheus скрейпит раз в 15 секунд и свежее этого данных
+# нет в принципе.
 # =====================================================================
 groups:
   - name: postgres
@@ -21,7 +29,7 @@ groups:
       # -----------------------------------------------------------------
       - alert: БазаНеОтвечает
         expr: pg_up == 0
-        for: 2m
+        for: 10s
         labels:
           severity: critical
         annotations:
@@ -39,7 +47,7 @@ groups:
         expr: |
           sum by (pg_instance) (pg_stat_activity_count)
           / max by (pg_instance) (pg_settings_max_connections) * 100 > 90
-        for: 5m
+        for: 1m
         labels:
           severity: critical
         annotations:
@@ -58,7 +66,7 @@ groups:
         expr: |
           (1 - node_filesystem_avail_bytes{mountpoint=~"/data_db|/mwal"}
              / node_filesystem_size_bytes{mountpoint=~"/data_db|/mwal"}) * 100 > 85
-        for: 10m
+        for: 1m
         labels:
           severity: critical
         annotations:
@@ -72,7 +80,7 @@ groups:
       # -----------------------------------------------------------------
       - alert: ДолгаяТранзакция
         expr: max by (pg_instance) (pg_stat_activity_max_tx_duration) > 3600
-        for: 5m
+        for: 1m
         labels:
           severity: warning
         annotations:
@@ -90,7 +98,7 @@ groups:
       # «всё хорошо», пока не спросишь.
       - alert: МониторингОслеп
         expr: up{job=~"postgres-exporter|node-exporter"} == 0
-        for: 5m
+        for: 1m
         labels:
           severity: warning
         annotations:
