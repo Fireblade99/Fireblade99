@@ -1,10 +1,10 @@
 {
-  "title": "PostgreSQL — детально ($pg_group)",
-  "description": "Аналог популярного community-дашборда, пересобранный под postgres_exporter 0.17.1 и node_exporter без Kubernetes-меток.",
+  "title": "PostgreSQL — детально (prod-airflow)",
+  "description": "Аналог популярного community-дашборда, пересобранный под postgres_exporter 0.17.1 и node_exporter без Kubernetes-меток. При нескольких группах хостов имя задаётся при импорте — допиши группу, иначе копии не различить в списке ссылок.",
   "tags": [
-    "postgres",
-    "db",
-    "stats"
+    "pg-monitoring",
+    "postgresql",
+    "detailed"
   ],
   "timezone": "browser",
   "editable": true,
@@ -29,10 +29,10 @@
         "name": "pg_group",
         "type": "constant",
         "label": "Группа хостов",
-        "query": "qse",
+        "query": "prod-airflow",
         "current": {
-          "text": "qse",
-          "value": "qse"
+          "text": "prod-airflow",
+          "value": "prod-airflow"
         },
         "hide": 2,
         "description": "Задаётся в Dashboard settings -> Variables. Должно совпадать с меткой pg_group в prometheus.yml."
@@ -2088,6 +2088,22 @@
           "sort": "desc"
         }
       }
+    }
+  ],
+  "links": [
+    {
+      "type": "dashboards",
+      "tags": [
+        "pg-monitoring"
+      ],
+      "title": "Другие дашборды",
+      "asDropdown": true,
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "icon": "external link",
+      "tooltip": "Переход между сводкой и детальным разбором",
+      "url": ""
     }
   ]
 }

@@ -1,9 +1,10 @@
 {
-  "title": "PostgreSQL — состояние ($pg_group)",
-  "description": "Дашборд под postgres_exporter 0.17.1 и node_exporter с настройками по умолчанию. Файлы правил не нужны: все выражения внутри панелей.",
+  "title": "PostgreSQL — состояние (qse)",
+  "description": "Дашборд под postgres_exporter 0.17.1 и node_exporter с настройками по умолчанию. Файлы правил не нужны: все выражения внутри панелей. При нескольких группах хостов имя задаётся при импорте — допиши группу, иначе копии не различить в списке ссылок.",
   "tags": [
+    "pg-monitoring",
     "postgresql",
-    "database"
+    "overview"
   ],
   "timezone": "browser",
   "editable": true,
@@ -1405,6 +1406,22 @@
         }
       },
       "description": "Рост базы. Резкий скачок без роста данных обычно означает распухание от мёртвых строк."
+    }
+  ],
+  "links": [
+    {
+      "type": "dashboards",
+      "tags": [
+        "pg-monitoring"
+      ],
+      "title": "Другие дашборды",
+      "asDropdown": true,
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "icon": "external link",
+      "tooltip": "Переход между сводкой и детальным разбором",
+      "url": ""
     }
   ]
 }

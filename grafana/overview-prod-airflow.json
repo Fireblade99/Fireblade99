@@ -1,0 +1,1427 @@
+{
+  "title": "PostgreSQL — состояние (prod-airflow)",
+  "description": "Дашборд под postgres_exporter 0.17.1 и node_exporter с настройками по умолчанию. Файлы правил не нужны: все выражения внутри панелей. При нескольких группах хостов имя задаётся при импорте — допиши группу, иначе копии не различить в списке ссылок.",
+  "tags": [
+    "pg-monitoring",
+    "postgresql",
+    "overview"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Источник данных",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      },
+      {
+        "name": "pg_group",
+        "type": "constant",
+        "label": "Группа хостов",
+        "query": "prod-airflow",
+        "current": {
+          "text": "prod-airflow",
+          "value": "prod-airflow"
+        },
+        "hide": 2,
+        "description": "Разделяет дашборды между наборами хостов. Задаётся один раз в Dashboard settings -> Variables. Значение должно совпадать с меткой pg_group в prometheus.yml."
+      },
+      {
+        "name": "pg_instance",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": "label_values(pg_up{pg_group=\"$pg_group\"}, pg_instance)",
+        "label": "База",
+        "refresh": 2,
+        "sort": 1,
+        "current": {},
+        "includeAll": false,
+        "description": "Список берётся из меток Prometheus за выбранный период. После переименования хоста старое имя исчезнет отсюда, как только выйдет за границу окна.",
+        "definition": "label_values(pg_up{pg_group=\"$pg_group\"}, pg_instance)"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Состояние — все хосты",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Доступность",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "pg_up{pg_group=\"$pg_group\"}",
+          "legendFormat": "{{pg_instance}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "ЛЕЖИТ",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "ЖИВА",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal"
+      },
+      "description": "1 — экспортёр на хосте БД подключается к Postgres. 0 — нет. Разрыв означает, что не работал сам мониторинг. Показывает ОБА хоста сразу, фильтр сверху на этот блок не действует. Значение мгновенное: серии, в которые перестали писать (например, после переименования хоста), исчезают сразу, а не висят до конца окна."
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Слоты подключений",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum by (pg_instance) (pg_stat_activity_count{pg_group=\"$pg_group\"}) / max by (pg_instance) (pg_settings_max_connections{pg_group=\"$pg_group\"})",
+          "legendFormat": "{{pg_instance}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal"
+      },
+      "description": "Занято от max_connections. Упрётся в 100% — новые клиенты получат отказ, а pg_up останется единицей. Показывает ОБА хоста сразу, фильтр сверху на этот блок не действует. Значение мгновенное: серии, в которые перестали писать (например, после переименования хоста), исчезают сразу, а не висят до конца окна."
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Диск /data_db",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "1 - node_filesystem_avail_bytes{pg_group=\"$pg_group\",mountpoint=\"/data_db\"} / node_filesystem_size_bytes{pg_group=\"$pg_group\",mountpoint=\"/data_db\"}",
+          "legendFormat": "{{pg_instance}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal"
+      },
+      "description": "Том с данными. Переполнение останавливает запись в Postgres мгновенно. Показывает ОБА хоста сразу, фильтр сверху на этот блок не действует. Значение мгновенное: серии, в которые перестали писать (например, после переименования хоста), исчезают сразу, а не висят до конца окна."
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Диск /mwal",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "1 - node_filesystem_avail_bytes{pg_group=\"$pg_group\",mountpoint=\"/mwal\"} / node_filesystem_size_bytes{pg_group=\"$pg_group\",mountpoint=\"/mwal\"}",
+          "legendFormat": "{{pg_instance}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal"
+      },
+      "description": "Том с WAL. Растёт при живой базе — обычно застрявший слот репликации или сломанный archive_command. Показывает ОБА хоста сразу, фильтр сверху на этот блок не действует. Значение мгновенное: серии, в которые перестали писать (например, после переименования хоста), исчезают сразу, а не висят до конца окна."
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Транзакций/с",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum by (pg_instance) (rate(pg_stat_database_xact_commit{pg_group=\"$pg_group\"}[5m])) + sum by (pg_instance) (rate(pg_stat_database_xact_rollback{pg_group=\"$pg_group\"}[5m]))",
+          "legendFormat": "{{pg_instance}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal"
+      },
+      "description": "Коммиты плюс откаты. Основной показатель нагрузки. Показывает ОБА хоста сразу, фильтр сверху на этот блок не действует. Значение мгновенное: серии, в которые перестали писать (например, после переименования хоста), исчезают сразу, а не висят до конца окна."
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Попадания в кэш",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum by (pg_instance) (rate(pg_stat_database_blks_hit{pg_group=\"$pg_group\"}[15m])) / (sum by (pg_instance) (rate(pg_stat_database_blks_hit{pg_group=\"$pg_group\"}[15m])) + sum by (pg_instance) (rate(pg_stat_database_blks_read{pg_group=\"$pg_group\"}[15m])))",
+          "legendFormat": "{{pg_instance}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.9
+              },
+              {
+                "color": "green",
+                "value": 0.95
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal"
+      },
+      "description": "Ниже 95% — база регулярно ходит мимо shared_buffers. Пусто = трафика не было: отношение не определено, а не равно нулю. Показывает ОБА хоста сразу, фильтр сверху на этот блок не действует. Значение мгновенное: серии, в которые перестали писать (например, после переименования хоста), исчезают сразу, а не висят до конца окна."
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Подключения и нагрузка — $pg_instance",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "panels": []
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Подключения по состояниям",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "targets": [
+        {
+          "expr": "sum by (state) (pg_stat_activity_count{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"})",
+          "legendFormat": "{{state}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        },
+        {
+          "expr": "max(pg_settings_max_connections{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"})",
+          "legendFormat": "лимит max_connections",
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 25,
+            "stacking": {
+              "mode": "normal"
+            },
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Рост «idle in transaction» — всегда баг приложения: незакрытая транзакция блокирует автовакуум по всей базе."
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Кто занимает подключения",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "targets": [
+        {
+          "expr": "sum by (usename, application_name) (pg_stat_activity_count{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}) > 0",
+          "legendFormat": "{{usename}} / {{application_name}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 25,
+            "stacking": {
+              "mode": "normal"
+            },
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Разбивка по пользователю и приложению. Когда слоты кончаются, здесь видно виновника."
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "Диски и хост — $pg_instance",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Заполнение томов базы",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 15
+      },
+      "targets": [
+        {
+          "expr": "1 - node_filesystem_avail_bytes{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\",mountpoint=~\"/data_db|/mwal|/pg_log\"} / node_filesystem_size_bytes{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\",mountpoint=~\"/data_db|/mwal|/pg_log\"}",
+          "legendFormat": "{{mountpoint}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Только тома базы: /data_db (данные), /mwal (WAL), /pg_log (логи). Остальные ФС хоста намеренно отфильтрованы, иначе /boot и /var/log/audit давали бы постоянный шум."
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Доступная память",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 15
+      },
+      "targets": [
+        {
+          "expr": "node_memory_MemAvailable_bytes{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}",
+          "legendFormat": "доступно",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        },
+        {
+          "expr": "node_memory_MemTotal_bytes{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}",
+          "legendFormat": "всего",
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "При нехватке OOM killer может прибить backend, и вся база уйдёт в аварийное восстановление."
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Ожидание диска (iowait)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 15
+      },
+      "targets": [
+        {
+          "expr": "avg by (instance) (rate(node_cpu_seconds_total{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\",mode=\"iowait\"}[5m]))",
+          "legendFormat": "iowait",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Диск не успевает за нагрузкой. Смотри вместе с временем самой долгой транзакции."
+    },
+    {
+      "id": 15,
+      "type": "row",
+      "title": "Эффективность — $pg_instance",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "panels": []
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Попадания в кэш",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 24
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(pg_stat_database_blks_hit{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[15m])) / (sum(rate(pg_stat_database_blks_hit{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[15m])) + sum(rate(pg_stat_database_blks_read{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[15m])))",
+          "legendFormat": "hit ratio",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Разрыв на графике означает «трафика не было», а не «ноль попаданий»: на простое отношение не определено."
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Доля откатов",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 24
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(pg_stat_database_xact_rollback{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[15m])) / (sum(rate(pg_stat_database_xact_commit{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[15m])) + sum(rate(pg_stat_database_xact_rollback{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[15m])))",
+          "legendFormat": "откаты",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Устойчивый рост — обычно ошибки в приложении."
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Временные файлы",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 24
+      },
+      "targets": [
+        {
+          "expr": "sum by (datname) (rate(pg_stat_database_temp_bytes{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[15m]))",
+          "legendFormat": "{{datname}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Запросам не хватает work_mem: сортировки и хэши уходят на диск, это на порядки медленнее."
+    },
+    {
+      "id": 19,
+      "type": "row",
+      "title": "Транзакции, блокировки, WAL — $pg_instance",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "panels": []
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Самая долгая транзакция",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 33
+      },
+      "targets": [
+        {
+          "expr": "max by (state) (pg_stat_activity_max_tx_duration{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"})",
+          "legendFormat": "{{state}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Долгая транзакция удерживает старые версии строк и не даёт вакууму работать."
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Блокировки по режимам",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 33
+      },
+      "targets": [
+        {
+          "expr": "sum by (mode) (pg_locks_count{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}) > 0",
+          "legendFormat": "{{mode}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 25,
+            "stacking": {
+              "mode": "normal"
+            },
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "AccessExclusiveLock на рабочей таблице означает, что кто-то делает DDL и блокирует всех."
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Взаимоблокировки",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 33
+      },
+      "targets": [
+        {
+          "expr": "sum by (datname) (increase(pg_stat_database_deadlocks{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[15m]))",
+          "legendFormat": "{{datname}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Postgres разорвал взаимоблокировку, убив одну из транзакций. Для приложения это потерянная работа."
+    },
+    {
+      "id": 23,
+      "type": "row",
+      "title": "WAL, чекпоинты, репликация — $pg_instance",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 41
+      },
+      "panels": []
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Размер WAL",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 42
+      },
+      "targets": [
+        {
+          "expr": "pg_wal_size_bytes{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}",
+          "legendFormat": "pg_wal",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Растёт при живой базе — почти всегда застрявший слот репликации или сломанный archive_command."
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Чекпоинты: плановые и досрочные",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 42
+      },
+      "targets": [
+        {
+          "expr": "rate(pg_stat_bgwriter_checkpoints_timed_total{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[30m])",
+          "legendFormat": "плановые",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        },
+        {
+          "expr": "rate(pg_stat_bgwriter_checkpoints_req_total{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[30m])",
+          "legendFormat": "досрочные (по переполнению WAL)",
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Досрочных больше плановых — max_wal_size мал для текущей записи. Следствие: всплески дисковой записи и просадки отклика."
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Репликация и архивация",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 42
+      },
+      "targets": [
+        {
+          "expr": "pg_replication_lag_seconds{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}",
+          "legendFormat": "отставание репликации, с",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        },
+        {
+          "expr": "increase(pg_stat_archiver_failed_count{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[1h])",
+          "legendFormat": "ошибок архивации за час",
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Сломанный archive_command копит WAL на /mwal до заполнения тома."
+    },
+    {
+      "id": 27,
+      "type": "timeseries",
+      "title": "Размеры баз",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 50
+      },
+      "targets": [
+        {
+          "expr": "pg_database_size_bytes{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}",
+          "legendFormat": "{{datname}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Рост базы. Резкий скачок без роста данных обычно означает распухание от мёртвых строк."
+    }
+  ],
+  "links": [
+    {
+      "type": "dashboards",
+      "tags": [
+        "pg-monitoring"
+      ],
+      "title": "Другие дашборды",
+      "asDropdown": true,
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "icon": "external link",
+      "tooltip": "Переход между сводкой и детальным разбором",
+      "url": ""
+    }
+  ]
+}

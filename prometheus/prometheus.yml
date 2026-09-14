@@ -47,7 +47,7 @@ scrape_configs:
         labels:
           pg_group: "qse"
 
-      # Новая группа. Впиши адреса и, если нужно, поменяй имя группы —
+      # Группа prod-airflow. Впиши адреса — имя группы уже проставлено
       # оно попадёт в переменную pg_group второго дашборда.
       # - targets:
       #     - "ХОСТ-3:9187"
@@ -55,7 +55,7 @@ scrape_configs:
       #     - "ХОСТ-5:9187"
       #     - "ХОСТ-6:9187"
       #   labels:
-      #     pg_group: "prod2"
+      #     pg_group: "prod-airflow"
 
   - job_name: node-exporter
     relabel_configs:
@@ -76,7 +76,7 @@ scrape_configs:
       #     - "ХОСТ-5:9100"
       #     - "ХОСТ-6:9100"
       #   labels:
-      #     pg_group: "prod2"
+      #     pg_group: "prod-airflow"
 
   # Сам Prometheus — чтобы заметить, если мониторинг сломался.
   - job_name: prometheus
