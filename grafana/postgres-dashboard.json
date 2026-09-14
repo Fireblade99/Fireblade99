@@ -1,5 +1,5 @@
 {
-  "title": "PostgreSQL — состояние",
+  "title": "PostgreSQL — состояние ($pg_group)",
   "description": "Дашборд под postgres_exporter 0.17.1 и node_exporter с настройками по умолчанию. Файлы правил не нужны: все выражения внутри панелей.",
   "tags": [
     "postgresql",
@@ -25,19 +25,32 @@
         "refresh": 1
       },
       {
+        "name": "pg_group",
+        "type": "constant",
+        "label": "Группа хостов",
+        "query": "qse",
+        "current": {
+          "text": "qse",
+          "value": "qse"
+        },
+        "hide": 2,
+        "description": "Разделяет дашборды между наборами хостов. Задаётся один раз в Dashboard settings -> Variables. Значение должно совпадать с меткой pg_group в prometheus.yml."
+      },
+      {
         "name": "pg_instance",
         "type": "query",
         "datasource": {
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "query": "label_values(pg_up, pg_instance)",
+        "query": "label_values(pg_up{pg_group=\"$pg_group\"}, pg_instance)",
         "label": "База",
         "refresh": 2,
         "sort": 1,
         "current": {},
         "includeAll": false,
-        "description": "Список берётся из меток Prometheus за выбранный период. После переименования хоста старое имя исчезнет отсюда, как только выйдет за границу окна."
+        "description": "Список берётся из меток Prometheus за выбранный период. После переименования хоста старое имя исчезнет отсюда, как только выйдет за границу окна.",
+        "definition": "label_values(pg_up{pg_group=\"$pg_group\"}, pg_instance)"
       }
     ]
   },
@@ -71,7 +84,7 @@
       },
       "targets": [
         {
-          "expr": "pg_up",
+          "expr": "pg_up{pg_group=\"$pg_group\"}",
           "legendFormat": "{{pg_instance}}",
           "refId": "A",
           "datasource": {
@@ -153,7 +166,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (pg_instance) (pg_stat_activity_count) / max by (pg_instance) (pg_settings_max_connections)",
+          "expr": "sum by (pg_instance) (pg_stat_activity_count{pg_group=\"$pg_group\"}) / max by (pg_instance) (pg_settings_max_connections{pg_group=\"$pg_group\"})",
           "legendFormat": "{{pg_instance}}",
           "refId": "A",
           "datasource": {
@@ -223,7 +236,7 @@
       },
       "targets": [
         {
-          "expr": "1 - node_filesystem_avail_bytes{mountpoint=\"/data_db\"} / node_filesystem_size_bytes{mountpoint=\"/data_db\"}",
+          "expr": "1 - node_filesystem_avail_bytes{pg_group=\"$pg_group\",mountpoint=\"/data_db\"} / node_filesystem_size_bytes{pg_group=\"$pg_group\",mountpoint=\"/data_db\"}",
           "legendFormat": "{{pg_instance}}",
           "refId": "A",
           "datasource": {
@@ -293,7 +306,7 @@
       },
       "targets": [
         {
-          "expr": "1 - node_filesystem_avail_bytes{mountpoint=\"/mwal\"} / node_filesystem_size_bytes{mountpoint=\"/mwal\"}",
+          "expr": "1 - node_filesystem_avail_bytes{pg_group=\"$pg_group\",mountpoint=\"/mwal\"} / node_filesystem_size_bytes{pg_group=\"$pg_group\",mountpoint=\"/mwal\"}",
           "legendFormat": "{{pg_instance}}",
           "refId": "A",
           "datasource": {
@@ -363,7 +376,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (pg_instance) (rate(pg_stat_database_xact_commit[5m])) + sum by (pg_instance) (rate(pg_stat_database_xact_rollback[5m]))",
+          "expr": "sum by (pg_instance) (rate(pg_stat_database_xact_commit{pg_group=\"$pg_group\"}[5m])) + sum by (pg_instance) (rate(pg_stat_database_xact_rollback{pg_group=\"$pg_group\"}[5m]))",
           "legendFormat": "{{pg_instance}}",
           "refId": "A",
           "datasource": {
@@ -413,7 +426,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (pg_instance) (rate(pg_stat_database_blks_hit[15m])) / (sum by (pg_instance) (rate(pg_stat_database_blks_hit[15m])) + sum by (pg_instance) (rate(pg_stat_database_blks_read[15m])))",
+          "expr": "sum by (pg_instance) (rate(pg_stat_database_blks_hit{pg_group=\"$pg_group\"}[15m])) / (sum by (pg_instance) (rate(pg_stat_database_blks_hit{pg_group=\"$pg_group\"}[15m])) + sum by (pg_instance) (rate(pg_stat_database_blks_read{pg_group=\"$pg_group\"}[15m])))",
           "legendFormat": "{{pg_instance}}",
           "refId": "A",
           "datasource": {
@@ -496,7 +509,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (state) (pg_stat_activity_count{pg_instance=\"$pg_instance\"})",
+          "expr": "sum by (state) (pg_stat_activity_count{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"})",
           "legendFormat": "{{state}}",
           "refId": "A",
           "datasource": {
@@ -505,7 +518,7 @@
           }
         },
         {
-          "expr": "max(pg_settings_max_connections{pg_instance=\"$pg_instance\"})",
+          "expr": "max(pg_settings_max_connections{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"})",
           "legendFormat": "лимит max_connections",
           "refId": "B",
           "datasource": {
@@ -561,7 +574,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (usename, application_name) (pg_stat_activity_count{pg_instance=\"$pg_instance\"}) > 0",
+          "expr": "sum by (usename, application_name) (pg_stat_activity_count{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}) > 0",
           "legendFormat": "{{usename}} / {{application_name}}",
           "refId": "A",
           "datasource": {
@@ -630,7 +643,7 @@
       },
       "targets": [
         {
-          "expr": "1 - node_filesystem_avail_bytes{pg_instance=\"$pg_instance\",mountpoint=~\"/data_db|/mwal|/pg_log\"} / node_filesystem_size_bytes{pg_instance=\"$pg_instance\",mountpoint=~\"/data_db|/mwal|/pg_log\"}",
+          "expr": "1 - node_filesystem_avail_bytes{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\",mountpoint=~\"/data_db|/mwal|/pg_log\"} / node_filesystem_size_bytes{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\",mountpoint=~\"/data_db|/mwal|/pg_log\"}",
           "legendFormat": "{{mountpoint}}",
           "refId": "A",
           "datasource": {
@@ -685,7 +698,7 @@
       },
       "targets": [
         {
-          "expr": "node_memory_MemAvailable_bytes{pg_instance=\"$pg_instance\"}",
+          "expr": "node_memory_MemAvailable_bytes{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}",
           "legendFormat": "доступно",
           "refId": "A",
           "datasource": {
@@ -694,7 +707,7 @@
           }
         },
         {
-          "expr": "node_memory_MemTotal_bytes{pg_instance=\"$pg_instance\"}",
+          "expr": "node_memory_MemTotal_bytes{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}",
           "legendFormat": "всего",
           "refId": "B",
           "datasource": {
@@ -749,7 +762,7 @@
       },
       "targets": [
         {
-          "expr": "avg by (instance) (rate(node_cpu_seconds_total{pg_instance=\"$pg_instance\",mode=\"iowait\"}[5m]))",
+          "expr": "avg by (instance) (rate(node_cpu_seconds_total{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\",mode=\"iowait\"}[5m]))",
           "legendFormat": "iowait",
           "refId": "A",
           "datasource": {
@@ -817,7 +830,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(pg_stat_database_blks_hit{pg_instance=\"$pg_instance\"}[15m])) / (sum(rate(pg_stat_database_blks_hit{pg_instance=\"$pg_instance\"}[15m])) + sum(rate(pg_stat_database_blks_read{pg_instance=\"$pg_instance\"}[15m])))",
+          "expr": "sum(rate(pg_stat_database_blks_hit{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[15m])) / (sum(rate(pg_stat_database_blks_hit{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[15m])) + sum(rate(pg_stat_database_blks_read{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[15m])))",
           "legendFormat": "hit ratio",
           "refId": "A",
           "datasource": {
@@ -872,7 +885,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(pg_stat_database_xact_rollback{pg_instance=\"$pg_instance\"}[15m])) / (sum(rate(pg_stat_database_xact_commit{pg_instance=\"$pg_instance\"}[15m])) + sum(rate(pg_stat_database_xact_rollback{pg_instance=\"$pg_instance\"}[15m])))",
+          "expr": "sum(rate(pg_stat_database_xact_rollback{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[15m])) / (sum(rate(pg_stat_database_xact_commit{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[15m])) + sum(rate(pg_stat_database_xact_rollback{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[15m])))",
           "legendFormat": "откаты",
           "refId": "A",
           "datasource": {
@@ -927,7 +940,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (datname) (rate(pg_stat_database_temp_bytes{pg_instance=\"$pg_instance\"}[15m]))",
+          "expr": "sum by (datname) (rate(pg_stat_database_temp_bytes{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[15m]))",
           "legendFormat": "{{datname}}",
           "refId": "A",
           "datasource": {
@@ -995,7 +1008,7 @@
       },
       "targets": [
         {
-          "expr": "max by (state) (pg_stat_activity_max_tx_duration{pg_instance=\"$pg_instance\"})",
+          "expr": "max by (state) (pg_stat_activity_max_tx_duration{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"})",
           "legendFormat": "{{state}}",
           "refId": "A",
           "datasource": {
@@ -1050,7 +1063,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (mode) (pg_locks_count{pg_instance=\"$pg_instance\"}) > 0",
+          "expr": "sum by (mode) (pg_locks_count{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}) > 0",
           "legendFormat": "{{mode}}",
           "refId": "A",
           "datasource": {
@@ -1106,7 +1119,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (datname) (increase(pg_stat_database_deadlocks{pg_instance=\"$pg_instance\"}[15m]))",
+          "expr": "sum by (datname) (increase(pg_stat_database_deadlocks{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[15m]))",
           "legendFormat": "{{datname}}",
           "refId": "A",
           "datasource": {
@@ -1173,7 +1186,7 @@
       },
       "targets": [
         {
-          "expr": "pg_wal_size_bytes{pg_instance=\"$pg_instance\"}",
+          "expr": "pg_wal_size_bytes{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}",
           "legendFormat": "pg_wal",
           "refId": "A",
           "datasource": {
@@ -1228,7 +1241,7 @@
       },
       "targets": [
         {
-          "expr": "rate(pg_stat_bgwriter_checkpoints_timed_total{pg_instance=\"$pg_instance\"}[30m])",
+          "expr": "rate(pg_stat_bgwriter_checkpoints_timed_total{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[30m])",
           "legendFormat": "плановые",
           "refId": "A",
           "datasource": {
@@ -1237,7 +1250,7 @@
           }
         },
         {
-          "expr": "rate(pg_stat_bgwriter_checkpoints_req_total{pg_instance=\"$pg_instance\"}[30m])",
+          "expr": "rate(pg_stat_bgwriter_checkpoints_req_total{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[30m])",
           "legendFormat": "досрочные (по переполнению WAL)",
           "refId": "B",
           "datasource": {
@@ -1291,7 +1304,7 @@
       },
       "targets": [
         {
-          "expr": "pg_replication_lag_seconds{pg_instance=\"$pg_instance\"}",
+          "expr": "pg_replication_lag_seconds{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}",
           "legendFormat": "отставание репликации, с",
           "refId": "A",
           "datasource": {
@@ -1300,7 +1313,7 @@
           }
         },
         {
-          "expr": "increase(pg_stat_archiver_failed_count{pg_instance=\"$pg_instance\"}[1h])",
+          "expr": "increase(pg_stat_archiver_failed_count{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}[1h])",
           "legendFormat": "ошибок архивации за час",
           "refId": "B",
           "datasource": {
@@ -1354,7 +1367,7 @@
       },
       "targets": [
         {
-          "expr": "pg_database_size_bytes{pg_instance=\"$pg_instance\"}",
+          "expr": "pg_database_size_bytes{pg_group=\"$pg_group\",pg_instance=\"$pg_instance\"}",
           "legendFormat": "{{datname}}",
           "refId": "A",
           "datasource": {

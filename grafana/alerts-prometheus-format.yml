@@ -11,6 +11,13 @@
 #   2. Более старая Grafana: используй Import-GrafanaAlerts.ps1 —
 #      он создаёт правила через API.
 #
+# ПЕРЕД ИМПОРТОМ: замени ГРУППА на значение метки pg_group из
+# prometheus.yml. Для каждого набора хостов — своя копия этого файла со
+# своим значением, и импортировать их надо в РАЗНЫЕ папки Grafana.
+#
+# Без этого фильтра правила накроют все хосты разом, и разделить
+# оповещения по командам или по критичности будет нечем.
+#
 # Пороги подписаны у каждого правила. Это отправная точка, а не истина:
 # под свою нагрузку их надо будет подвинуть.
 #
@@ -28,7 +35,7 @@ groups:
 
       # -----------------------------------------------------------------
       - alert: БазаНеОтвечает
-        expr: pg_up == 0
+        expr: pg_up{pg_group="ГРУППА"} == 0
         for: 10s
         labels:
           severity: critical
@@ -43,10 +50,13 @@ groups:
       # Отдельно от «база не отвечает» намеренно: когда слоты кончаются,
       # новые клиенты получают отказ, а pg_up остаётся единицей. Для
       # приложения это авария, для хелсчека — тишина.
+      # pg_group в by не для красоты: без неё агрегация съедает метку,
+      # и у сработавшего алерта её не остаётся — маршрутизировать
+      # уведомления по группе станет нечем.
       - alert: СлотыПодключенийНаИсходе
         expr: |
-          sum by (pg_instance) (pg_stat_activity_count)
-          / max by (pg_instance) (pg_settings_max_connections) * 100 > 90
+          sum by (pg_group, pg_instance) (pg_stat_activity_count{pg_group="ГРУППА"})
+          / max by (pg_group, pg_instance) (pg_settings_max_connections{pg_group="ГРУППА"}) * 100 > 90
         for: 1m
         labels:
           severity: critical
@@ -64,8 +74,8 @@ groups:
       # читать.
       - alert: ДискБазыКончается
         expr: |
-          (1 - node_filesystem_avail_bytes{mountpoint=~"/data_db|/mwal"}
-             / node_filesystem_size_bytes{mountpoint=~"/data_db|/mwal"}) * 100 > 85
+          (1 - node_filesystem_avail_bytes{pg_group="ГРУППА",mountpoint=~"/data_db|/mwal"}
+             / node_filesystem_size_bytes{pg_group="ГРУППА",mountpoint=~"/data_db|/mwal"}) * 100 > 85
         for: 1m
         labels:
           severity: critical
@@ -79,7 +89,7 @@ groups:
 
       # -----------------------------------------------------------------
       - alert: ДолгаяТранзакция
-        expr: max by (pg_instance) (pg_stat_activity_max_tx_duration) > 3600
+        expr: max by (pg_group, pg_instance) (pg_stat_activity_max_tx_duration{pg_group="ГРУППА"}) > 3600
         for: 1m
         labels:
           severity: warning
@@ -97,7 +107,7 @@ groups:
       # что данные перестали поступать. Молчащий мониторинг неотличим от
       # «всё хорошо», пока не спросишь.
       - alert: МониторингОслеп
-        expr: up{job=~"postgres-exporter|node-exporter"} == 0
+        expr: up{pg_group="ГРУППА",job=~"postgres-exporter|node-exporter"} == 0
         for: 1m
         labels:
           severity: warning
