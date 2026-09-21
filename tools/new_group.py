@@ -82,6 +82,25 @@ def die(msg):
     sys.exit(1)
 
 
+def check_templates(GRAFANA):
+    """
+    Проверяет ВСЕ образцы до того, как что-либо создано.
+
+    Раньше проверка шла по ходу дела, и нехватка последнего образца
+    оставляла половину комплекта на диске — а следующий запуск упирался
+    в защиту «файлы этой группы уже есть» и требовал ручной уборки.
+    """
+    need = [f"overview-{TEMPLATE_GROUP}.json",
+            f"detailed-{TEMPLATE_GROUP}.json",
+            "alerts-prometheus-format.yml"]
+    missing = [n for n in need if not (GRAFANA / n).exists()]
+    if missing:
+        die("в папке " + str(GRAFANA) + " не хватает образцов:\n       " +
+            "\n       ".join(missing) +
+            "\n\n       Нужны все три: два дашборда и шаблон алертов.\n"
+            "       Ничего не создано.")
+
+
 def make_dashboard(kind, group, GRAFANA):
     src = GRAFANA / f"{kind}-{TEMPLATE_GROUP}.json"
     if not src.exists():
@@ -152,6 +171,7 @@ def main():
 
     GRAFANA = find_dir(explicit)
     print(f"папка с файлами: {GRAFANA}")
+    check_templates(GRAFANA)
 
     if not VALID.match(group):
         die("имя группы: латиница, цифры, дефис и подчёркивание, до 63 символов.\n"
