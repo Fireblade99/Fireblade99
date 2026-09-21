@@ -2,7 +2,13 @@
 """
 Создаёт комплект файлов для новой группы хостов.
 
-    python3 tools/new_group.py prod-etl
+    python new_group.py prod-etl              (Windows)
+    python3 tools/new_group.py prod-etl       (Linux/macOS)
+
+Папка с файлами-образцами ищется сама: текущая, ./grafana, папка
+скрипта. Не нашлась — укажи явно:
+
+    python new_group.py prod-etl --dir C:\\путь\\к\\файлам
 
 На выходе три файла в grafana/:
     overview-<группа>.json    сводка по всем хостам группы
@@ -27,9 +33,45 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-GRAFANA = ROOT / "grafana"
 TEMPLATE_GROUP = "qse"          # с какой группы снимается образец
+
+
+def find_dir(explicit=None):
+    """
+    Ищет папку с файлами-образцами.
+
+    Раскладка у всех разная: у кого-то это клон репозитория, у кого-то
+    просто папка со скачанными файлами. Поэтому не гадаем, а проверяем
+    несколько очевидных мест и берём первое, где образец реально лежит.
+    """
+    marker = f"overview-{TEMPLATE_GROUP}.json"
+    here = Path.cwd()
+    mine = Path(__file__).resolve().parent
+
+    if explicit:
+        d = Path(explicit).expanduser().resolve()
+        if not (d / marker).exists():
+            die(f"в папке {d} нет файла {marker}")
+        return d
+
+    candidates = [
+        here,                    # запустили прямо в папке с файлами
+        here / "grafana",        # запустили из корня репозитория
+        mine,                    # скрипт лежит рядом с файлами
+        mine / "grafana",
+        mine.parent / "grafana", # раскладка репозитория: tools/ рядом с grafana/
+    ]
+    seen = []
+    for d in candidates:
+        if d in seen:
+            continue
+        seen.append(d)
+        if (d / marker).exists():
+            return d
+
+    die(f"не нашёл {marker}. Искал в:\n       " +
+        "\n       ".join(str(d) for d in seen) +
+        "\n       Укажи папку явно:  new_group.py <группа> --dir <путь>")
 
 # Имя группы попадает в метки Prometheus и в имена файлов.
 VALID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$")
@@ -40,10 +82,10 @@ def die(msg):
     sys.exit(1)
 
 
-def make_dashboard(kind, group):
+def make_dashboard(kind, group, GRAFANA):
     src = GRAFANA / f"{kind}-{TEMPLATE_GROUP}.json"
     if not src.exists():
-        die(f"нет образца {src.relative_to(ROOT)}")
+        die(f"нет образца {src}")
     d = json.loads(src.read_text(encoding="utf-8"))
 
     # 1. заголовок: имя группы в нём обязательно — в списке ссылок между
@@ -69,10 +111,10 @@ def make_dashboard(kind, group):
     return out, d["title"], panels
 
 
-def make_alerts(group):
+def make_alerts(group, GRAFANA):
     src = GRAFANA / "alerts-prometheus-format.yml"
     if not src.exists():
-        die(f"нет образца {src.relative_to(ROOT)}")
+        die(f"нет образца {src}")
     text = src.read_text(encoding="utf-8")
     if "ГРУППА" not in text:
         die(f"в {src.name} нет плейсхолдера ГРУППА — образец испорчен")
@@ -96,9 +138,20 @@ def check(path):
 
 
 def main():
-    if len(sys.argv) != 2:
+    args = sys.argv[1:]
+    explicit = None
+    if "--dir" in args:
+        i = args.index("--dir")
+        if i + 1 >= len(args):
+            die("после --dir нужен путь")
+        explicit = args[i + 1]
+        del args[i:i + 2]
+    if len(args) != 1:
         sys.exit(__doc__)
-    group = sys.argv[1]
+    group = args[0]
+
+    GRAFANA = find_dir(explicit)
+    print(f"папка с файлами: {GRAFANA}")
 
     if not VALID.match(group):
         die("имя группы: латиница, цифры, дефис и подчёркивание, до 63 символов.\n"
@@ -109,17 +162,17 @@ def main():
     existing = list(GRAFANA.glob(f"*-{group}.*"))
     if existing:
         die("файлы для этой группы уже есть:\n       " +
-            "\n       ".join(str(p.relative_to(ROOT)) for p in existing) +
+            "\n       ".join(p.name for p in existing) +
             "\n       Удали их, если хочешь пересоздать.")
 
     print(f"группа: {group}   (образец: {TEMPLATE_GROUP})\n")
     for kind in ("overview", "detailed"):
-        out, title, panels = make_dashboard(kind, group)
-        print(f"  {out.relative_to(ROOT)}")
+        out, title, panels = make_dashboard(kind, group, GRAFANA)
+        print(f"  {out.name}")
         print(f"      «{title}», панелей {panels} — {check(out)}")
 
-    out, n = make_alerts(group)
-    print(f"  {out.relative_to(ROOT)}")
+    out, n = make_alerts(group, GRAFANA)
+    print(f"  {out.name}")
     print(f"      фильтр pg_group=\"{group}\" в {n} местах — {check(out)}")
 
     print(f"""
