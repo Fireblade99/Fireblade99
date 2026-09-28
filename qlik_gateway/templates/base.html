@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}Qlik Gateway{% endblock %}</title><link rel="stylesheet" href="/static/style.css">
+{% block head %}{% endblock %}</head><body>
+{% if admin %}
+<header><span class="brand">Qlik Gateway</span>
+<nav><a href="/ui/">Мониторинг</a><a href="/ui/executions">Запуски</a><a href="/ui/clients">Клиенты</a><a href="/ui/tasks">Задачи Qlik</a><a href="/ui/audit">Журнал</a><a href="/docs">API</a></nav>
+<span class="me">{{ admin }}<form class="inline" method="post" action="/ui/logout"><button>Выйти</button></form></span></header>
+{% endif %}
+<main>
+{% if flash %}<div class="flash {{ flash.kind }}">{{ flash.msg }}</div>{% endif %}
+{% block content %}{% endblock %}
+</main></body></html>

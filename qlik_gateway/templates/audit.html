@@ -1,0 +1,23 @@
+{% extends "base.html" %}{% block content %}
+<h1>Журнал действий</h1>
+<p class="muted">Все вызовы API шлюза (client), действия администраторов (admin), вызовы шлюза в Qlik (qlik) и события координатора (system).</p>
+<form class="filters" method="get">
+<div><label>Тип</label><select name="actor_type"><option value="">все</option>{% for t in ["client","admin","qlik","system"] %}<option {% if f.actor_type == t %}selected{% endif %}>{{ t }}</option>{% endfor %}</select></div>
+<div><label>Кто</label><input type="text" name="actor" value="{{ f.actor }}"></div>
+<div><label>Действие</label><input type="text" name="action" value="{{ f.action }}"></div>
+<div><label>Результат</label><select name="outcome"><option value="">все</option>{% for o in ["ok","denied","limited","error"] %}<option {% if f.outcome == o %}selected{% endif %}>{{ o }}</option>{% endfor %}</select></div>
+<div><button class="primary">Найти</button></div></form>
+<div class="table-wrap"><table>
+<tr><th>Время (UTC)</th><th>Тип</th><th>Кто</th><th>Действие</th><th>Результат</th><th class="num">мс</th><th>IP</th><th>Задача / запуск</th><th>Метаданные</th><th>Сообщение</th></tr>
+{% for a in rows %}<tr>
+<td class="small">{{ a.ts|dt }}</td><td>{{ a.actor_type }}</td><td>{{ a.actor }}</td><td class="mono">{{ a.action }}<div class="muted">{{ a.method or "" }} {{ a.path or "" }}</div></td>
+<td><span class="badge {{ 'ok' if a.outcome == 'ok' else ('warn' if a.outcome == 'limited' else 'bad') }}">{{ a.outcome }} {{ a.status_code or "" }}</span></td>
+<td class="num">{{ "%.0f"|format(a.latency_ms) if a.latency_ms is not none else "" }}</td>
+<td class="small">{{ a.ip or "" }}<div class="muted">{{ (a.user_agent or "")[:40] }}</div></td>
+<td class="small mono">{{ (a.task_id or "")[:8] }}{% if a.execution_id %} <a href="/ui/executions/{{ a.execution_id }}">#{{ a.execution_id }}</a>{% endif %}</td>
+<td class="small mono">{{ a.meta|tojson if a.meta else "" }}</td><td class="small">{{ a.message }}</td></tr>
+{% else %}<tr><td colspan="10" class="muted">Пусто</td></tr>{% endfor %}
+</table></div>
+<p>{% if page > 1 %}<a href="?actor_type={{ f.actor_type }}&actor={{ f.actor }}&action={{ f.action }}&outcome={{ f.outcome }}&page={{ page-1 }}">← назад</a>{% endif %}
+{% if has_next %}<a href="?actor_type={{ f.actor_type }}&actor={{ f.actor }}&action={{ f.action }}&outcome={{ f.outcome }}&page={{ page+1 }}" style="float:right">дальше →</a>{% endif %}</p>
+{% endblock %}

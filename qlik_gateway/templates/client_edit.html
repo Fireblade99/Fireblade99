@@ -1,0 +1,65 @@
+{% extends "base.html" %}{% block content %}
+<h1>{% if is_new %}Новый клиент{% else %}Клиент «{{ c.name }}» {% if c.enabled %}<span class="badge ok">активен</span>{% else %}<span class="badge bad">заблокирован</span>{% endif %}{% endif %}</h1>
+
+{% if new_token %}<div class="card"><b>Токен клиента — показывается один раз.</b> Передайте его владельцу (например, в Airflow Connection <span class="mono">qlik_gateway_default</span>, поле password):
+<div class="token mono" style="margin-top:8px">{{ new_token }}</div></div>{% endif %}
+
+{% if not is_new %}
+<div class="card" style="display:flex;gap:12px;flex-wrap:wrap;align-items:end">
+{% if c.enabled %}
+<form method="post" action="/ui/clients/{{ c.id }}/block" onsubmit="return confirm('Заблокировать клиента {{ c.name }}?')">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<label>Заблокировать доступ</label><input type="text" name="reason" placeholder="причина" required>
+<div><span class="check"><input type="checkbox" name="cancel_queued" value="1" checked> отменить его запросы в очереди</span>
+<span class="check"><input type="checkbox" name="stop_running" value="1"> остановить его reload в Qlik</span></div>
+<button class="danger">Заблокировать</button></form>
+{% else %}
+<div>Причина блокировки: <b>{{ c.blocked_reason or "—" }}</b></div>
+<form method="post" action="/ui/clients/{{ c.id }}/unblock"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="primary">Разблокировать</button></form>
+{% endif %}
+<form method="post" action="/ui/clients/{{ c.id }}/rotate" onsubmit="return confirm('Старый токен сразу перестанет работать. Продолжить?')" style="margin-left:auto">
+<input type="hidden" name="csrf" value="{{ csrf }}"><button>Перевыпустить токен</button></form>
+<a class="btn" href="/ui/executions?client_id={{ c.id }}">Запуски</a><a class="btn" href="/ui/audit?actor={{ c.name }}">Журнал</a>
+</div>
+{% endif %}
+
+<form method="post" action="{% if is_new %}/ui/clients/new{% else %}/ui/clients/{{ c.id }}{% endif %}" class="card">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+{% if is_new %}<label>Имя (например, airflow-dwh-prod)</label><input type="text" name="name" required pattern="[A-Za-z0-9_.\-]+">{% endif %}
+<label>Описание</label><input type="text" name="description" value="{{ c.description }}">
+<label>Владелец / контакт команды</label><input type="text" name="owner_contact" value="{{ c.owner_contact }}">
+
+<label>Разрешённые действия</label>
+{% for a in actions %}<span class="check"><input type="checkbox" name="act_{{ a }}" value="1" {% if a in c.allowed_actions %}checked{% endif %}> {{ a }}</span>{% endfor %}
+<div class="muted small">start — поставить reload; state — статус; details — детали запуска; info — информация о задаче; log — лог скрипта; stop — остановка</div>
+
+<label>Разрешённые задачи Qlik</label>
+<span class="check"><input type="checkbox" name="all_tasks" value="1" {% if "*" in c.allowed_tasks %}checked{% endif %}> все задачи из каталога шлюза</span>
+<div class="tasklist">{% for t in tasks %}<div><span class="check"><input type="checkbox" name="tasks" value="{{ t.id }}" {% if t.id in c.allowed_tasks %}checked{% endif %}> {{ t.name }} <span class="muted small">{{ t.app_name }} · {{ t.stream_name }}</span></span></div>{% else %}<span class="muted">Каталог пуст — синхронизируйте задачи на странице «Задачи Qlik»</span>{% endfor %}</div>
+<label>Доп. ID задач (по одному в строке)</label>
+<textarea name="extra_tasks">{% for t in c.allowed_tasks if t != "*" and t not in tasks|map(attribute="id")|list %}{{ t }}
+{% endfor %}</textarea>
+
+<label>Разрешённые IP / подсети (пусто = любые)</label>
+<textarea name="allowed_ips" placeholder="10.1.2.0/24">{{ c.allowed_ips|join("\n") }}</textarea>
+
+<div class="row">
+<div><label>Запросов в минуту</label><input type="number" name="requests_per_minute" value="{{ c.requests_per_minute }}" min="0"></div>
+<div><label>Запусков в час</label><input type="number" name="starts_per_hour" value="{{ c.starts_per_hour }}" min="0"></div>
+<div><label>Одновременно в Qlik</label><input type="number" name="max_concurrent" value="{{ c.max_concurrent }}" min="0"></div>
+<div><label>Приоритет (меньше — раньше)</label><input type="number" name="priority" value="{{ c.priority }}"></div>
+</div>
+<div class="muted small">0 = без ограничения</div>
+<label>Токен действует до (UTC, пусто = бессрочно)</label>
+<input type="datetime-local" name="token_expires_at" value="{{ c.token_expires_at.strftime('%Y-%m-%dT%H:%M') if c.token_expires_at else '' }}">
+<p><button class="primary">{% if is_new %}Создать и выдать токен{% else %}Сохранить{% endif %}</button></p>
+</form>
+
+{% if recent_audit %}
+<h2>Последние действия клиента</h2>
+<div class="table-wrap"><table><tr><th>Время</th><th>Действие</th><th>Результат</th><th>IP</th><th>Инициатор</th><th>Сообщение</th></tr>
+{% for a in recent_audit %}<tr><td class="small">{{ a.ts|dt }}</td><td class="mono">{{ a.action }}</td>
+<td><span class="badge {{ 'ok' if a.outcome == 'ok' else 'bad' }}">{{ a.outcome }} {{ a.status_code or "" }}</span></td>
+<td class="small">{{ a.ip or "" }}</td><td class="small mono">{{ a.meta|tojson if a.meta else "" }}</td><td class="small">{{ a.message }}</td></tr>{% endfor %}
+</table></div>{% endif %}
+{% endblock %}

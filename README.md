@@ -1,0 +1,157 @@
+# Qlik Gateway
+
+Буферный сервис между внешними планировщиками (Airflow, в дальнейшем другие платформенные команды) и Qlik Sense Enterprise on Windows.
+
+Qlik видит **одного** пользователя: сервисную учётку шлюза, которая заходит через отдельный Virtual Proxy с JWT. Все остальные обращаются только к шлюзу. Шлюз проверяет права, ставит запуски в очередь, сам запускает reload, сам опрашивает Qlik, хранит историю и пишет в журнал каждое действие.
+
+## Какие проблемы это решает
+
+| Проблема (из переписки / письма вендора) | Как решено |
+|---|---|
+| У Airflow права админа, системные учётки с клиентским сертификатом, отозвать нельзя | Airflow не получает никаких доступов к Qlik. У него есть только токен шлюза. **Блокировка клиента в UI действует мгновенно** и не зависит от сертификатов на стороне Airflow. Доступ в Qlik — через Virtual Proxy + JWT (рекомендация вендора), ключ подписи есть только у шлюза |
+| Нужно знать, кто, где, что и когда запускает | Каждый вызов попадает в журнал: клиент, IP, User-Agent, `dag_id`/`task_id`/`run_id`/try/owner/host (провайдер Airflow передаёт их сам), действие, результат, задержка. Журнал фильтруется в UI |
+| Частый опрос статуса (`executionsession`/`task state`) нагружает Qlik | Клиенты получают статус **из БД шлюза**, в Qlik при этом запрос не уходит. Координатор опрашивает Qlik **одним пакетным запросом** по всем активным запускам раз в N секунд (`QGW_POLL_INTERVAL_SECONDS`), сколько бы DAG'ов ни ждали. Для Airflow есть long-poll `?wait=60` |
+| Запуски должны идти через один координатор, а не из каждого бизнес-DAG | Координатор — это `qlik-gateway worker`, единственный компонент, который стартует reload и ходит за статусами. Бизнес-DAG только ставит заявку и ждёт |
+| Нужен источник для массовой обработки состояний и хранения истории | Таблица `executions` хранит полную историю: очередь → старт → нода → статусы → сообщения Qlik → длительность. Там же каталог задач и снимки ресурсов нод |
+| Быстро найти источник нагрузки и отключить его | Дашборд «Кто создаёт нагрузку»: вызовы, отклонённые запросы, запуски, дубли и ошибки по каждому клиенту. Отключить можно на трёх уровнях: заблокировать клиента (с отменой его очереди и, по желанию, остановкой reload), заблокировать задачу для всех или включить **стоп-кран** на всю отправку в Qlik |
+| Ограничивать | На каждого клиента: разрешённые действия (`start/state/details/info/log/stop`), разрешённые задачи, разрешённые IP/подсети, лимит запросов в минуту, запусков в час, одновременных reload, приоритет, срок жизни токена. Для задачи — минимальный интервал между запусками. Глобально — предел одновременных reload |
+| Балансировка на выделенные ноды (3 шедулера) | Custom property `Source=Airflow` на приложениях плюс правило балансировки. Настройка описана в [docs/qlik-setup.md](docs/qlik-setup.md). Шлюз берёт в каталог только задачи с этим свойством |
+| Мониторинг: какой таск, состояние, потребляемые ресурсы | UI: активные запуски, топ задач по числу, ошибкам и времени, ноды Qlik (CPU, RAM, загруженные приложения по engine healthcheck), число запросов шлюза в Qlik за час. `/metrics` для Prometheus |
+| Отдельных журналов вызовов API в Qlik нет | Шлюз сам журналирует каждый свой вызов в QRS: метод, endpoint, код ответа, задержку, ошибку |
+| Двойные запуски одной задачи | Если задача уже в очереди или выполняется, новый запрос присоединяется к существующему запуску (`deduplicated: true`) |
+
+## Архитектура
+
+```mermaid
+flowchart LR
+  subgraph Clients["Клиенты шлюза"]
+    AF1["Airflow DAG'и<br/>(QlikReloadOperator)"]
+    AF2["Другие платформы"]
+  end
+  subgraph GW["Qlik Gateway"]
+    API["API + UI<br/>токены, права, лимиты, журнал"]
+    DB[("PostgreSQL<br/>clients · executions<br/>audit_log · tasks · node_health")]
+    W["Координатор (worker)<br/>очередь → старт<br/>пакетный опрос статусов"]
+  end
+  subgraph Q["Qlik Sense"]
+    VP["Virtual Proxy /airflowgw<br/>JWT"]
+    QRS["QRS / Scheduler<br/>выделенные ноды"]
+  end
+  AF1 -- "Bearer token" --> API
+  AF2 -- "Bearer token" --> API
+  API <--> DB
+  W <--> DB
+  W -- "JWT (ключ только у шлюза)" --> VP --> QRS
+```
+
+* **API** (`qlik-gateway api`) — REST для клиентов плюс админский UI. Сам в Qlik почти не ходит, только за логом скрипта и stop.
+* **Координатор** (`qlik-gateway worker`) — раз в `QGW_DISPATCH_INTERVAL_SECONDS` берёт заявки из очереди с учётом приоритета, глобального и клиентского лимита параллельности, паузы и блокировок и стартует их в Qlik (`POST /qrs/task/{id}/start/synchronous`). Раз в `QGW_POLL_INTERVAL_SECONDS` одним запросом `GET /qrs/executionresult/full?filter=executionID eq … or …` обновляет все активные запуски. Периодически синхронизирует каталог задач и снимает health нод. Если поднять несколько реплик, активной будет одна, остальные ждут в резерве (lease в БД).
+
+### Статусы запуска
+
+`QUEUED` → `STARTING` → `RUNNING` → `SUCCESS` | `FAILED` | `ABORTED` | `SKIPPED`
+
+Служебные статусы шлюза:
+* `CANCELLED` — отменён до отправки в Qlik;
+* `START_ERROR` — Qlik отказал в старте;
+* `LOST` — Qlik так и не прислал результат;
+* `TIMEOUT` — превышен лимит ожидания шлюза.
+
+## Быстрый старт (демо с эмулятором Qlik)
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env            # QGW_QLIK_MODE=mock
+QGW_EMBEDDED_WORKER=true qlik-gateway api --workers 1
+# UI:  http://localhost:8080/ui/   (admin / change-me из .env)
+# API: http://localhost:8080/docs
+```
+
+Дальше в UI: «Задачи Qlik» → «Синхронизировать», затем «Клиенты» → «Новый клиент». Токен показывается один раз.
+
+```bash
+TOKEN=qgw_...
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "X-Airflow-Dag-Id: demo" \
+     localhost:8080/api/v1/tasks/11111111-1111-1111-1111-111111111111/start
+curl -s -H "Authorization: Bearer $TOKEN" "localhost:8080/api/v1/executions/1?wait=30"
+```
+
+Продакшен: `docker compose up` (Postgres, API и worker) или две службы на Windows/Linux-хосте с общим Postgres. Настройка стороны Qlik — [docs/qlik-setup.md](docs/qlik-setup.md).
+
+## API для клиентов
+
+Авторизация: `Authorization: Bearer <token>` (или `X-Api-Key`). Метаданные инициатора передаются заголовками `X-Airflow-*` / `X-Initiator-*` или полем `meta` в теле запроса на старт.
+
+| Метод | Путь | Право | Что делает |
+|---|---|---|---|
+| GET | `/api/v1/whoami` | — | кто я, мои права и лимиты |
+| GET | `/api/v1/tasks` | info | доступные мне задачи |
+| GET | `/api/v1/tasks/{task_id}` | info | **getinfo**: задача и последние запуски |
+| POST | `/api/v1/tasks/{task_id}/start` | start | **post task**: поставить reload, ответ `202 {execution_id}` |
+| GET | `/api/v1/executions/{id}?wait=N` | state | **get state** из БД шлюза, long-poll до 60 с |
+| GET | `/api/v1/executions/{id}/details` | details | **getdetails**: нода, время, сообщения Qlik, инициатор |
+| GET | `/api/v1/executions/{id}/log` | log | лог скрипта Qlik |
+| POST | `/api/v1/executions/{id}/cancel` | stop | убрать из очереди или остановить reload |
+| GET | `/api/v1/executions` | state | мои последние запуски |
+
+Коды ошибок:
+* `401` — нет токена или токен неверный;
+* `403` — клиент заблокирован, нет права или задачи, чужой IP;
+* `404` — задачи нет в каталоге;
+* `409` — задача выключена в Qlik;
+* `423` — задача заблокирована админом;
+* `429` — превышен лимит.
+
+Тело ответа при ошибке: `{"error": "<code>", "message": "..."}`.
+
+## Airflow
+
+Провайдер лежит в `airflow/plugins/qlik_gateway_provider`. Скопируйте его в `plugins/` Airflow и создайте Connection `qlik_gateway_default`: тип HTTP, host `https://qlik-gateway…`, в password — токен клиента.
+
+```python
+from qlik_gateway_provider import QlikReloadOperator, QlikExecutionSensor
+
+QlikReloadOperator(
+    task_id="reload_sales",
+    qlik_task_id="<guid задачи>",
+    deferrable=True,  # ждёт в triggerer, не держит слот воркера
+)
+```
+
+* Оператор сам отправляет `dag_id`, `task_id`, `run_id`, `try_number`, `owner` и host, всё это видно в журнале и карточке запуска.
+* При неуспехе хвост лога скрипта Qlik попадает в лог задачи Airflow.
+* При kill задачи reload отменяется, но только если его запустил именно этот таск, а не присоединился к чужому.
+* Вариант fire-and-forget плюс `QlikExecutionSensor(mode="reschedule")` показан в `airflow/dags/example_qlik_reload.py`.
+
+## Конфигурация
+
+Все параметры задаются переменными окружения `QGW_*`: см. [.env.example](.env.example) и `qlik_gateway/config.py`. Основные:
+
+| Переменная | По умолчанию | |
+|---|---|---|
+| `QGW_DATABASE_URL` | sqlite | для продакшена `postgresql+psycopg://…` |
+| `QGW_QLIK_MODE` | `mock` | `jwt` для реального Qlik |
+| `QGW_QLIK_BASE_URL` | | `https://qlik-host/<prefix виртуального прокси>` |
+| `QGW_QLIK_JWT_*` | | ключ, пользователь, директория, имена атрибутов |
+| `QGW_QLIK_TASK_CUSTOM_PROPERTY(_VALUE)` | `Source`/`Airflow` | какие задачи доступны через шлюз |
+| `QGW_MAX_CONCURRENT_EXECUTIONS` | 3 | общий предел одновременных reload через шлюз |
+| `QGW_POLL_INTERVAL_SECONDS` | 20 | как часто шлюз опрашивает Qlik (один запрос на всех) |
+| `QGW_NODE_HEALTH_URLS` | | `https://node1/airflowgw/engine/healthcheck,…` |
+
+## Эксплуатация
+
+* **Отозвать доступ** у клиента: UI → Клиенты → «Заблокировать». Токен перестаёт работать сразу. При необходимости здесь же отменяется очередь клиента и останавливаются его reload.
+* **Инцидент на кластере**: дашборд → «Стоп-кран». Заявки продолжают приниматься, но в Qlik ничего не уходит, пока паузу не снимут.
+* **Найти источник нагрузки**: дашборд «Кто создаёт нагрузку», затем «Журнал» с фильтром по клиенту или `outcome=limited/denied`, затем «Запуски» с фильтром по инициатору (`dag_id`).
+* **Метрики**: `/metrics` — `qgw_api_requests_total{client,action,outcome}`, `qgw_qlik_calls_total`, `qgw_qlik_call_seconds`, `qgw_executions_active`, `qgw_executions_finished_total`, `qgw_dispatch_paused`.
+* **Журнал** хранится `QGW_AUDIT_RETENTION_DAYS` дней (по умолчанию 90).
+* **CLI**: `qlik-gateway create-admin <user>`, `qlik-gateway create-client <name> --tasks '*'`.
+
+## Разработка
+
+```bash
+pip install -e ".[dev]" requests ruff
+pytest          # 28 тестов: API, координатор, UI, QRS-клиент (JWT/xrfkey/фильтры), провайдер Airflow против живого шлюза
+ruff check .
+```

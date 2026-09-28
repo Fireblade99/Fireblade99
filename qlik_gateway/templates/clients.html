@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block content %}
+<h1>Клиенты <a class="btn" href="/ui/clients/new" style="float:right">+ Новый клиент</a></h1>
+<p class="muted">Внешние системы, которым разрешено обращаться к шлюзу. Доступ к Qlik есть только у самого шлюза, поэтому блокировка клиента отзывает доступ мгновенно, независимо от сертификатов на их стороне.</p>
+<div class="table-wrap"><table>
+<tr><th>Клиент</th><th>Состояние</th><th>Действия</th><th>Задачи</th><th>Лимиты</th><th>Токен выдан</th><th>Последний вызов</th></tr>
+{% for c in clients %}<tr>
+<td><a href="/ui/clients/{{ c.id }}">{{ c.name }}</a><div class="muted small">{{ c.owner_contact }}</div></td>
+<td>{% if c.enabled %}<span class="badge ok">активен</span>{% else %}<span class="badge bad">заблокирован</span><div class="small muted">{{ c.blocked_reason }}</div>{% endif %}</td>
+<td class="small">{{ c.allowed_actions|join(", ") }}</td>
+<td class="small">{% if "*" in c.allowed_tasks %}все{% else %}{{ c.allowed_tasks|length }}{% endif %}</td>
+<td class="small">{{ c.requests_per_minute }}/мин · {{ c.starts_per_hour }} запусков/ч · {{ c.max_concurrent }} параллельно</td>
+<td class="small">{{ c.token_created_at|dt }}{% if c.token_expires_at %}<div class="muted">до {{ c.token_expires_at|dt }}</div>{% endif %}</td>
+<td class="small">{{ c.last_seen_at|dt }}<div class="muted">{{ c.last_seen_ip or "" }}</div></td>
+</tr>{% else %}<tr><td colspan="7" class="muted">Клиентов пока нет</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

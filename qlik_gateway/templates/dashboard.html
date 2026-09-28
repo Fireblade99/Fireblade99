@@ -1,0 +1,62 @@
+{% extends "base.html" %}{% block head %}<meta http-equiv="refresh" content="30">{% endblock %}
+{% block content %}
+<h1>Мониторинг <span class="muted small">обновляется каждые 30 с · UTC</span></h1>
+
+<div class="card" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+{% if paused %}
+  <span class="badge bad">ЗАПУСК В QLIK ПРИОСТАНОВЛЕН</span>
+  <span class="small">кем: {{ paused.by }} · {{ paused.at }} · {{ paused.reason }}</span>
+  <form class="inline" method="post" action="/ui/dispatch"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="pause" value="0"><button class="primary">Возобновить</button></form>
+{% else %}
+  <span class="badge ok">Запуск в Qlik активен</span>
+  <span class="small muted">лимит одновременных reload: {{ settings.max_concurrent_executions }} · опрос Qlik раз в {{ settings.poll_interval_seconds|int }} с одним запросом</span>
+  <form class="inline" method="post" action="/ui/dispatch" onsubmit="return confirm('Остановить отправку задач в Qlik? Новые запросы будут копиться в очереди.')" style="margin-left:auto">
+   <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="pause" value="1">
+   <input type="text" name="reason" placeholder="причина" style="width:200px;display:inline-block">
+   <button class="danger">Стоп-кран: пауза всех запусков</button></form>
+{% endif %}
+</div>
+
+<div class="grid">
+ <div class="stat"><div class="v">{{ by_status.get("QUEUED",0) }}</div><div class="l">В очереди шлюза</div></div>
+ <div class="stat"><div class="v">{{ by_status.get("STARTING",0) + by_status.get("RUNNING",0) }}</div><div class="l">Выполняется в Qlik</div></div>
+ <div class="stat"><div class="v">{{ by_status.get("SUCCESS",0) }}</div><div class="l">Успешно за 24ч</div></div>
+ <div class="stat"><div class="v">{{ by_status.get("FAILED",0) + by_status.get("START_ERROR",0) + by_status.get("LOST",0) + by_status.get("TIMEOUT",0) + by_status.get("ABORTED",0) }}</div><div class="l">С ошибкой за 24ч</div></div>
+ <div class="stat"><div class="v">{{ qlik_calls_hour }}</div><div class="l">Запросов шлюза в Qlik за час{% if qlik_errors_hour %} · <span style="color:var(--bad)">{{ qlik_errors_hour }} ошибок</span>{% endif %}</div></div>
+</div>
+
+<h2>Сейчас в работе</h2>
+<div class="table-wrap"><table>{% include "_exec_head.html" %}
+{% for e in active %}{% include "_exec_row.html" %}{% else %}<tr><td colspan="9" class="muted">Нет активных запусков</td></tr>{% endfor %}
+</table></div>
+
+<h2>Кто создаёт нагрузку (24 ч)</h2>
+<div class="table-wrap"><table>
+<tr><th>Клиент</th><th>Состояние</th><th class="num">Вызовов API</th><th class="num">Отклонено</th><th class="num">Запусков</th><th class="num">Схлопнуто дублей</th><th class="num">Неуспешных</th><th>Последний вызов</th><th></th></tr>
+{% set maxcalls = (load|map(attribute="calls")|max) if load else 0 %}
+{% for r in load %}<tr>
+<td><a href="/ui/clients/{{ r.client.id }}">{{ r.client.name }}</a><div class="muted small">{{ r.client.owner_contact }}</div></td>
+<td>{% if r.client.enabled %}<span class="badge ok">активен</span>{% else %}<span class="badge bad">заблокирован</span>{% endif %}</td>
+<td class="num">{{ r.calls }}<div class="bar"><i style="width:{{ (100 * r.calls / maxcalls) if maxcalls else 0 }}%"></i></div></td>
+<td class="num">{{ r.rejected }}</td><td class="num">{{ r.starts }}</td><td class="num">{{ r.dedup }}</td><td class="num">{{ r.fails }}</td>
+<td class="small">{{ r.client.last_seen_at|dt }}<div class="muted">{{ r.client.last_seen_ip or "" }}</div></td>
+<td><a href="/ui/executions?client_id={{ r.client.id }}">запуски</a> · <a href="/ui/audit?actor={{ r.client.name }}">журнал</a></td>
+</tr>{% else %}<tr><td colspan="9" class="muted">Клиентов пока нет</td></tr>{% endfor %}
+</table></div>
+
+<div class="row">
+<div class="card"><h2 style="margin-top:0">Топ задач (24 ч)</h2><div class="table-wrap"><table>
+<tr><th>Задача</th><th class="num">Запусков</th><th class="num">Ошибок</th><th class="num">Сред.</th><th class="num">Макс.</th><th class="num">Σ время</th></tr>
+{% for t in top_tasks %}{% set d = durations.get(t.task_id) %}<tr>
+<td><a href="/ui/executions?task={{ t.task_id }}">{{ t.task_name }}</a></td><td class="num">{{ t.runs }}</td><td class="num">{{ t.fails or 0 }}</td>
+<td class="num">{{ d[0]|dur if d else "—" }}</td><td class="num">{{ d[1]|dur if d else "—" }}</td><td class="num">{{ d[2]|dur if d else "—" }}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">Нет данных</td></tr>{% endfor %}</table></div></div>
+
+<div class="card"><h2 style="margin-top:0">Ресурсы нод Qlik (engine healthcheck)</h2>
+{% if nodes %}<div class="table-wrap"><table><tr><th>Нода</th><th class="num">CPU %</th><th class="num">RAM занято, МБ</th><th class="num">RAM своб., МБ</th><th class="num">Приложений</th><th>Снято</th></tr>
+{% for n in nodes %}<tr><td>{{ n.node }} {% if not n.ok %}<span class="badge bad">недоступна</span>{% elif n.saturated %}<span class="badge warn">saturated</span>{% endif %}</td>
+<td class="num">{{ "%.0f"|format(n.cpu_pct) if n.cpu_pct is not none else "—" }}</td><td class="num">{{ "%.0f"|format(n.mem_committed_mb) if n.mem_committed_mb is not none else "—" }}</td>
+<td class="num">{{ "%.0f"|format(n.mem_free_mb) if n.mem_free_mb is not none else "—" }}</td><td class="num">{{ n.apps_loaded if n.apps_loaded is not none else "—" }}</td><td class="small">{{ n.ts|dt }}</td></tr>{% endfor %}
+</table></div>{% else %}<p class="muted">Не настроено (QGW_NODE_HEALTH_URLS).</p>{% endif %}
+</div></div>
+{% endblock %}

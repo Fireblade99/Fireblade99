@@ -1,0 +1,11 @@
+<tr>
+<td><a href="/ui/executions/{{ e.id }}">#{{ e.id }}</a></td>
+<td><span class="badge {{ status_class(e.status) }}">{{ e.status }}</span>{% if e.qlik_status_text %}<div class="muted small">{{ e.qlik_status_text }}</div>{% endif %}</td>
+<td>{{ e.task_name }}<div class="muted mono">{{ e.task_id[:8] }}</div></td>
+<td><a href="/ui/clients/{{ e.client_id }}">{{ e.client.name }}</a></td>
+<td class="small">{% for k, v in e.initiator.items() if k in ("dag_id","task_id","run_id","owner","host","user") %}<div><span class="muted">{{ k }}:</span> {{ v }}</div>{% endfor %}</td>
+<td class="small">{{ e.created_at|dt }}</td>
+<td class="num">{{ e.wait_seconds|dur }}</td>
+<td class="num">{{ e.duration_seconds|dur }}</td>
+<td class="small">{{ e.node or "—" }}</td>
+</tr>
