@@ -3,6 +3,7 @@
 import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -583,29 +584,95 @@ def audit_page(
     actor: str = "",
     outcome: str = "",
     action: str = "",
+    ip: str = "",
+    target: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    per_page: int = 50,
     page: int = 1,
     user: str = Depends(admin_user),
     db: Session = Depends(get_db),
 ):
-    q = select(AuditLog)
+    conds = []
     if actor_type:
-        q = q.where(AuditLog.actor_type == actor_type)
+        conds.append(AuditLog.actor_type == actor_type)
     if actor:
-        q = q.where(AuditLog.actor.ilike(f"%{actor}%"))
+        conds.append(AuditLog.actor.ilike(f"%{actor}%"))
     if outcome:
-        q = q.where(AuditLog.outcome == outcome)
+        conds.append(AuditLog.outcome == outcome)
     if action:
-        q = q.where(AuditLog.action.ilike(f"%{action}%"))
-    per = 200
-    rows = db.scalars(q.order_by(AuditLog.id.desc()).offset((page - 1) * per).limit(per + 1)).all()
+        conds.append(AuditLog.action.ilike(f"%{action}%"))
+    if ip:
+        conds.append(AuditLog.ip.ilike(f"%{ip}%"))
+    if target:  # task id (or its beginning) or execution number
+        t = target.strip().lstrip("#")
+        conds.append((AuditLog.execution_id == int(t)) if t.isdigit() else AuditLog.task_id.ilike(f"{t}%"))
+    dt_from, dt_to = _parse_dt(date_from), _parse_dt(date_to)
+    if dt_from:
+        conds.append(AuditLog.ts >= dt_from)
+    if dt_to:
+        conds.append(AuditLog.ts < dt_to + timedelta(minutes=1))  # the minute given is inclusive
+
+    per_page = per_page if per_page in PAGE_SIZES else 50
+    total = db.scalar(select(func.count(AuditLog.id)).where(*conds))
+    pages = max(1, -(-total // per_page))
+    page = min(max(1, page), pages)
+    rows = db.scalars(
+        select(AuditLog).where(*conds).order_by(AuditLog.id.desc()).offset((page - 1) * per_page).limit(per_page)
+    ).all()
+
+    f = {
+        "actor_type": actor_type,
+        "actor": actor,
+        "outcome": outcome,
+        "action": action,
+        "ip": ip,
+        "target": target,
+        "date_from": date_from,
+        "date_to": date_to,
+        "per_page": per_page,
+    }
+    now = utcnow()
+    presets = [
+        (label, urlencode({**{k: v for k, v in f.items() if v}, "date_from": _fmt_dt(now - delta), "date_to": ""}))
+        for label, delta in (
+            ("15 минут", timedelta(minutes=15)),
+            ("час", timedelta(hours=1)),
+            ("сутки", timedelta(days=1)),
+            ("неделя", timedelta(days=7)),
+        )
+    ]
     return render(
         request,
         "audit.html",
-        rows=rows[:per],
-        has_next=len(rows) > per,
+        rows=rows,
+        f=f,
+        total=total,
         page=page,
-        f={"actor_type": actor_type, "actor": actor, "outcome": outcome, "action": action},
+        pages=pages,
+        per_page=per_page,
+        page_sizes=PAGE_SIZES,
+        qs=urlencode({k: v for k, v in f.items() if v}),
+        qs_base=urlencode({k: v for k, v in f.items() if v and k != "per_page"}),
+        presets=presets,
+        first_row=(page - 1) * per_page + 1 if total else 0,
+        last_row=min(page * per_page, total),
     )
+
+
+PAGE_SIZES = (20, 50, 100)
+
+
+def _parse_dt(value: str) -> datetime | None:
+    """<input type=datetime-local> value (UTC) -> naive UTC datetime."""
+    try:
+        return datetime.fromisoformat(value.strip()) if value.strip() else None
+    except ValueError:
+        return None
+
+
+def _fmt_dt(d: datetime) -> str:
+    return d.strftime("%Y-%m-%dT%H:%M")
 
 
 def _404():

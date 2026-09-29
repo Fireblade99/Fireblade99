@@ -1,12 +1,21 @@
 {% extends "base.html" %}{% block content %}
 <h1>Журнал действий</h1>
-<p class="muted">Все вызовы API шлюза (client), действия администраторов (admin), вызовы шлюза в Qlik (qlik) и события координатора (system).</p>
-<form class="filters" method="get">
+<p class="muted">Все вызовы API шлюза (client), действия администраторов (admin), вызовы шлюза в Qlik (qlik) и события координатора (system). Время — UTC.</p>
+<form class="filters card" method="get">
 <div><label>Тип</label><select name="actor_type"><option value="">все</option>{% for t in ["client","admin","qlik","system"] %}<option {% if f.actor_type == t %}selected{% endif %}>{{ t }}</option>{% endfor %}</select></div>
-<div><label>Кто</label><input type="text" name="actor" value="{{ f.actor }}"></div>
-<div><label>Действие</label><input type="text" name="action" value="{{ f.action }}"></div>
+<div><label>Кто</label><input type="text" name="actor" value="{{ f.actor }}" placeholder="клиент / админ"></div>
+<div><label>Действие</label><input type="text" name="action" value="{{ f.action }}" placeholder="api.start, qlik GET…"></div>
 <div><label>Результат</label><select name="outcome"><option value="">все</option>{% for o in ["ok","denied","limited","error"] %}<option {% if f.outcome == o %}selected{% endif %}>{{ o }}</option>{% endfor %}</select></div>
-<div><button class="primary">Найти</button></div></form>
+<div><label>IP</label><input type="text" name="ip" value="{{ f.ip }}"></div>
+<div><label>Задача / запуск</label><input type="text" name="target" value="{{ f.target }}" placeholder="ID задачи или #номер"></div>
+<div><label>С (UTC)</label><input type="datetime-local" name="date_from" value="{{ f.date_from }}"></div>
+<div><label>По (UTC)</label><input type="datetime-local" name="date_to" value="{{ f.date_to }}"></div>
+<input type="hidden" name="per_page" value="{{ per_page }}">
+<div><button class="primary">Найти</button> <a class="btn" href="/ui/audit">Сбросить</a></div>
+<div class="presets small"><span class="muted">Быстро:</span> {% for label, q in presets %}<a href="?{{ q }}">{{ label }}</a>{% endfor %}</div>
+</form>
+
+{% include "_pagination.html" %}
 <div class="table-wrap"><table>
 <tr><th>Время (UTC)</th><th>Тип</th><th>Кто</th><th>Действие</th><th>Результат</th><th class="num">мс</th><th>IP</th><th>Задача / запуск</th><th>Метаданные</th><th>Сообщение</th></tr>
 {% for a in rows %}<tr>
@@ -16,8 +25,7 @@
 <td class="small">{{ a.ip or "" }}<div class="muted">{{ (a.user_agent or "")[:40] }}</div></td>
 <td class="small mono">{{ (a.task_id or "")[:8] }}{% if a.execution_id %} <a href="/ui/executions/{{ a.execution_id }}">#{{ a.execution_id }}</a>{% endif %}</td>
 <td class="small mono">{{ a.meta|tojson if a.meta else "" }}</td><td class="small">{{ a.message }}</td></tr>
-{% else %}<tr><td colspan="10" class="muted">Пусто</td></tr>{% endfor %}
+{% else %}<tr><td colspan="10" class="muted">Ничего не найдено</td></tr>{% endfor %}
 </table></div>
-<p>{% if page > 1 %}<a href="?actor_type={{ f.actor_type }}&actor={{ f.actor }}&action={{ f.action }}&outcome={{ f.outcome }}&page={{ page-1 }}">← назад</a>{% endif %}
-{% if has_next %}<a href="?actor_type={{ f.actor_type }}&actor={{ f.actor }}&action={{ f.action }}&outcome={{ f.outcome }}&page={{ page+1 }}" style="float:right">дальше →</a>{% endif %}</p>
+{% include "_pagination.html" %}
 {% endblock %}
