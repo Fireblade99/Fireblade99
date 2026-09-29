@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% block content %}
 <h1>Задачи Qlik
 <form class="inline" method="post" action="/ui/tasks/sync" style="float:right"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Синхронизировать с Qlik</button></form></h1>
-<p class="muted">Каталог reload-задач, доступных через шлюз (фильтр по custom property, например Source=Airflow). Блокировка задачи действует на всех клиентов сразу.</p>
+<p class="muted">Каталог reload-задач, доступных через шлюз (приложения с custom property ExternalRun=Yes; кому доступны — по GatewayClient в QMC и ручной выдаче в карточке клиента). Блокировка задачи действует на всех клиентов сразу.</p>
 <div class="table-wrap"><table>
 <tr><th>Задача</th><th>Приложение / поток</th><th>Qlik</th><th>Кому доступна</th><th class="num">Запусков</th><th>Последний</th><th>Управление</th></tr>
 {% for t in tasks %}{% set l = last.get(t.id) %}<tr>

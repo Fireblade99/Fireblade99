@@ -278,7 +278,16 @@ def client_new_page(request: Request, user: str = Depends(admin_user), db: Sessi
         max_concurrent=s.default_max_concurrent,
         priority=100,
     )
-    return render(request, "client_edit.html", c=blank, actions=ACTIONS, tasks=_all_tasks(db), is_new=True)
+    return render(
+        request,
+        "client_edit.html",
+        c=blank,
+        actions=ACTIONS,
+        tasks=_all_tasks(db),
+        qlik_granted=set(),
+        client_prop=get_settings().qlik_client_custom_property,
+        is_new=True,
+    )
 
 
 def _all_tasks(db: Session):
@@ -328,12 +337,15 @@ def client_edit_page(client_id: int, request: Request, user: str = Depends(admin
     recent_audit = db.scalars(
         select(AuditLog).where(AuditLog.client_id == client_id).order_by(AuditLog.id.desc()).limit(30)
     ).all()
+    tasks = _all_tasks(db)
     return render(
         request,
         "client_edit.html",
         c=c,
         actions=ACTIONS,
-        tasks=_all_tasks(db),
+        tasks=tasks,
+        qlik_granted={t.id for t in tasks if c.name in svc.granted_in_qlik(t)},
+        client_prop=get_settings().qlik_client_custom_property,
         is_new=False,
         new_token=new_token and new_token["token"],
         recent_audit=recent_audit,
@@ -438,7 +450,7 @@ def tasks_page(request: Request, user: str = Depends(admin_user), db: Session = 
         )
     }
     clients = db.scalars(select(Client)).all()
-    users = {t.id: [c.name for c in clients if svc.client_can_task(c, t.id)] for t in tasks}
+    users = {t.id: [c.name for c in clients if svc.client_can_task(c, t.id, t)] for t in tasks}
     return render(request, "tasks.html", tasks=tasks, last=last, users=users)
 
 

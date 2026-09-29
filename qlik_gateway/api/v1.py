@@ -91,7 +91,9 @@ def _iso(dt) -> str | None:
 def _load_execution(db: Session, client: Client, execution_id: int, request: Request) -> Execution:
     request.state.audit["execution_id"] = execution_id
     ex = db.get(Execution, execution_id)
-    if ex is None or (ex.client_id != client.id and not svc.client_can_task(client, ex.task_id)):
+    if ex is None or (
+        ex.client_id != client.id and not svc.client_can_task(client, ex.task_id, db.get(QlikTask, ex.task_id))
+    ):
         raise ServiceError(404, "execution_not_found", f"Execution {execution_id} not found")
     request.state.audit["task_id"] = ex.task_id
     return ex

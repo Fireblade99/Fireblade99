@@ -50,46 +50,58 @@ QGW_QLIK_JWT_USER_DIRECTORY=CORP
 
 Проверка: `GET https://qlik.company.local/airflowgw/qrs/about?xrfkey=0123456789abcdef` с заголовками `X-Qlik-Xrfkey: 0123456789abcdef` и `Authorization: Bearer <jwt>` должен вернуть 200. Шлюз сам делает это в «Задачи Qlik» → «Синхронизировать».
 
-## 3. Права сервисной учётки (минимально необходимые)
+## 3. Custom properties: модель доступа
 
-Пользователь `CORP\svc_qlik_gateway` создаётся при первом входе по JWT. Роль RootAdmin ему **не** выдавайте. Нужно отдельное правило безопасности (QMC → Security rules → Create new):
+Доступ управляется в QMC двумя свойствами на **приложениях**:
 
-* **Resource filter**: `ReloadTask_*, ExecutionResult_*, ExecutionSession_*, App_*`
-* **Actions**: Read, Update (Update нужен для старта и остановки задачи)
-* **Conditions**:
-  ```
-  user.name = "svc_qlik_gateway" and user.userDirectory = "CORP"
-  and ((resource.resourcetype = "App" and resource.@Source = "Airflow")
-       or (resource.resourcetype = "ReloadTask" and resource.app.@Source = "Airflow")
-       or resource.resourcetype like "Execution*")
-  ```
-* **Context**: Only in QMC. Если скачивание лога скрипта отдаёт 403, поставьте Both.
+| Свойство | Значения | Что означает |
+|---|---|---|
+| `ExternalRun` | `Yes` | Задачи приложения можно запускать извне через шлюз, а reload уходит на выделенные ноды. Это **периметр**: без этой метки шлюз задачу не видит, и Qlik не даст её запустить |
+| `GatewayClient` | имена клиентов шлюза: `airflow-dwh`, `platform-ml`, … (несколько значений) | **Кому** из клиентов шлюза разрешено запускать задачи приложения. Имя должно совпадать с именем клиента в UI шлюза |
 
-Так шлюз физически не сможет запускать задачи, не помеченные `Source=Airflow`, даже при ошибке в конфигурации шлюза.
+Плюс служебное свойство для нод: `NodePurpose=Airflow`.
 
-## 4. Custom property и выделенные ноды
+Создание (QMC → **Custom properties** → **Create new** → Apply):
 
-1. QMC → Custom properties → Create:
-   * `Source`, значения `Airflow`, resource types: **Apps** (при желании также Reload tasks);
-   * `NodePurpose`, значение `Airflow`, resource type: **Nodes**.
-2. Поставьте `Source=Airflow` на всех приложениях, которые перезагружаются через API.
-3. Поставьте `NodePurpose=Airflow` на 3 ноды, выделенные под эти reload (на них должны быть Scheduler в роли worker и Engine).
+1. `ExternalRun`: resource types **Apps** (и при желании **Reload tasks**), значение `Yes`.
+2. `GatewayClient`: resource types **Apps**, значения — имена клиентов. Новое значение добавляется, когда появляется новый клиент.
+3. `NodePurpose`: resource types **Nodes**, значение `Airflow`.
+
+Проставить значения:
+* **QMC → Apps**: выделите приложения → **Edit** → справа раздел **Custom properties**. Укажите `ExternalRun = Yes`, в `GatewayClient` отметьте нужных клиентов, затем **Apply**. Можно выделить несколько приложений сразу.
+* **QMC → Nodes**: выделите `scheduler`, `scheduler_1`, `scheduler_3` → **Edit** → `NodePurpose = Airflow` → **Apply**.
+
+Шлюз подхватит изменения при синхронизации каталога: автоматически раз в 10 минут или сразу по кнопке в UI.
+
+## 4. Права сервисной учётки (минимально необходимые)
+
+Пользователь `CORP\svc_qlik_gateway` создаётся при первом входе по JWT. Роль RootAdmin ему **не** выдавайте. Нужны три правила (QMC → **Security rules** → **Create new** → включить **Advanced**, Context: **Both in hub and QMC**). Вместо `CORP` подставьте значение `QGW_QLIK_JWT_USER_DIRECTORY`.
+
+| Правило | Resource filter | Actions | Conditions |
+|---|---|---|---|
+| `QGW - apps read` | `App_*` | Read | `user.name = "svc_qlik_gateway" and user.userDirectory = "CORP" and resource.@ExternalRun = "Yes"` |
+| `QGW - reload tasks` | `ReloadTask_*` | Read, Update | `user.name = "svc_qlik_gateway" and user.userDirectory = "CORP" and (resource.app.@ExternalRun = "Yes" or resource.@ExternalRun = "Yes")` |
+| `QGW - executions read` | `ExecutionResult_*, ExecutionSession_*` | Read | `user.name = "svc_qlik_gateway" and user.userDirectory = "CORP"` |
+
+Update нужен для старта и остановки задачи. Если скачивание лога скрипта отдаёт 403, добавьте `FileReference_*` (Read) во второе правило.
+
+Так шлюз физически не сможет запустить задачу без `ExternalRun=Yes`, даже при ошибке в конфигурации шлюза. Проверка: **Preview** внизу правила, пользователь `svc_qlik_gateway`.
 
 ## 5. Балансировка reload на выделенные ноды
 
-Совет вендора: «задачи, запускаемые через API, отметить custom property `Source=Airflow` и балансировать их на выделенный узел». QMC → Security rules → Create new → **Load balancing**:
+Совет вендора: задачи, запускаемые через API, пометить custom property и балансировать на выделенный узел. QMC → **Load balancing rules** → **Create new**:
 
 * **Resource filter**: `App_*`
 * **Actions**: Load balancing
 * **Conditions**:
   ```
-  (resource.@Source = "Airflow" and node.@NodePurpose = "Airflow")
-  or (resource.@Source != "Airflow" and node.@NodePurpose != "Airflow")
+  (resource.@ExternalRun = "Yes" and node.@NodePurpose = "Airflow")
+  or (resource.@ExternalRun != "Yes" and node.@NodePurpose != "Airflow")
   ```
 
-Затем отключите или ограничьте дефолтное правило `ResourcesOnNonCentralNodes` (или добавьте в него условие `resource.@Source != "Airflow"`). Иначе приложения с `Source=Airflow` по-прежнему могут уйти на общие ноды.
+Встроенное правило `ResourcesOnNonCentralNodes` дополните условием `and resource.@ExternalRun != "Yes"`. Правила балансировки складываются через ИЛИ, и без этого приложения могут уйти на общие ноды.
 
-Проверка: запустите задачу через шлюз и откройте карточку запуска в UI. Поле «Нода» (`executingNodeName` из QRS) должно показывать одну из трёх выделенных нод.
+Проверка: запустите задачу через шлюз и откройте карточку запуска в UI. Поле «Нода» (`executingNodeName` из QRS) должно показывать одну из трёх выделенных нод. Выбор ноды для reload зависит от версии QSEoW: если задача ушла на другую ноду, смотрите настройки Scheduler (QMC → Schedulers).
 
 ## 6. Закрыть прямой доступ Airflow к Qlik
 

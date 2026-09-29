@@ -40,9 +40,13 @@ class Settings(BaseSettings):
     qlik_jwt_user_directory_attr: str = "userDirectory"
     qlik_jwt_audience: str | None = None
     qlik_jwt_ttl_seconds: int = 300
-    # Only tasks whose app (vendor advice) or task has this custom property are synced to the catalog.
-    qlik_task_custom_property: str | None = "Source"
-    qlik_task_custom_property_value: str | None = "Airflow"
+    # Perimeter: only tasks whose app (or the task itself) has this custom property value are
+    # synced to the catalog and can be run through the gateway (e.g. ExternalRun=Yes).
+    qlik_task_custom_property: str | None = "ExternalRun"
+    qlik_task_custom_property_value: str | None = "Yes"
+    # Access per client managed in QMC: a client may run tasks of apps whose property contains the
+    # client's name (e.g. GatewayClient=airflow-dwh). Empty = access only via the gateway UI.
+    qlik_client_custom_property: str | None = "GatewayClient"
 
     # --- coordinator (worker) -----------------------------------------------
     embedded_worker: bool = False  # run the worker loop inside the API process (dev only)

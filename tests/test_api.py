@@ -205,3 +205,13 @@ def test_long_poll_returns_terminal(http, coordinator, make_client, mock):
     _finish_all(mock)
     coordinator.tick(force=True)
     assert http.get(f"/api/v1/executions/{eid}?wait=30", headers=h).json()["status"] == "SUCCESS"
+
+
+def test_access_granted_via_qlik_custom_property(http, coordinator, make_client):
+    # mock: SALES has GatewayClient=airflow-dwh, HR has airflow-dwh and platform-ml
+    _, dwh = make_client("airflow-dwh", tasks=())
+    _, ml = make_client("platform-ml", tasks=())
+    assert http.post(f"/api/v1/tasks/{SALES}/start", headers=dwh).status_code == 202
+    assert http.post(f"/api/v1/tasks/{SALES}/start", headers=ml).status_code == 403
+    assert {t["id"] for t in http.get("/api/v1/tasks", headers=ml).json()} == {HR}
+    assert {t["id"] for t in http.get("/api/v1/tasks", headers=dwh).json()} == {SALES, HR}

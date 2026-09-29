@@ -34,8 +34,9 @@
 <div class="muted small">start — поставить reload; state — статус; details — детали запуска; info — информация о задаче; log — лог скрипта; stop — остановка</div>
 
 <label>Разрешённые задачи Qlik</label>
+{% if client_prop %}<div class="muted small">Основной способ — в QMC: приложению ставится custom property <b>{{ client_prop }}</b> = <b>{{ c.name or "имя клиента" }}</b>, и его задачи становятся доступны клиенту автоматически (отмечены «из QMC»). Галочки ниже — дополнительная ручная выдача.</div>{% endif %}
 <span class="check"><input type="checkbox" name="all_tasks" value="1" {% if "*" in c.allowed_tasks %}checked{% endif %}> все задачи из каталога шлюза</span>
-<div class="tasklist">{% for t in tasks %}<div><span class="check"><input type="checkbox" name="tasks" value="{{ t.id }}" {% if t.id in c.allowed_tasks %}checked{% endif %}> {{ t.name }} <span class="muted small">{{ t.app_name }} · {{ t.stream_name }}</span></span></div>{% else %}<span class="muted">Каталог пуст — синхронизируйте задачи на странице «Задачи Qlik»</span>{% endfor %}</div>
+<div class="tasklist">{% for t in tasks %}<div><span class="check"><input type="checkbox" name="tasks" value="{{ t.id }}" {% if t.id in c.allowed_tasks %}checked{% endif %}> {{ t.name }} <span class="muted small">{{ t.app_name }} · {{ t.stream_name }}</span>{% if t.id in qlik_granted %} <span class="badge info">из QMC</span>{% endif %}</span></div>{% else %}<span class="muted">Каталог пуст — синхронизируйте задачи на странице «Задачи Qlik»</span>{% endfor %}</div>
 <label>Доп. ID задач (по одному в строке)</label>
 <textarea name="extra_tasks">{% for t in c.allowed_tasks if t != "*" and t not in tasks|map(attribute="id")|list %}{{ t }}
 {% endfor %}</textarea>

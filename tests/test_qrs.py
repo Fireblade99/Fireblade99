@@ -32,6 +32,8 @@ def make_client(keys, handler, calls=None):
         qlik_jwt_private_key_path=str(path),
         qlik_jwt_user_id="svc_gw",
         qlik_jwt_user_directory="CORP",
+        qlik_task_custom_property="Source",
+        qlik_task_custom_property_value="Airflow",
     )
     hook = (lambda *a: calls.append(a)) if calls is not None else None
     return QrsJwtClient(s, hook, transport=httpx.MockTransport(handler))
@@ -99,7 +101,7 @@ def test_list_tasks_filters_by_custom_property_on_app_or_task(keys):
             return httpx.Response(
                 200,
                 json=[
-                    {"id": "app-a", "customProperties": [cp("Source", "Airflow")]},
+                    {"id": "app-a", "customProperties": [cp("Source", "Airflow"), cp("GatewayClient", "dwh")]},
                     {"id": "app-x", "customProperties": [cp("Source", "Manual"), cp("Owner", "Airflow")]},
                 ],
             )
@@ -128,6 +130,7 @@ def test_list_tasks_filters_by_custom_property_on_app_or_task(keys):
     tasks = make_client(keys, handler).list_reload_tasks()
     assert [t.id for t in tasks] == [TASK, "t-own-cp"]
     assert tasks[0].stream_name == "Finance" and tasks[0].tags == ["dwh"]
+    assert tasks[0].custom_properties["GatewayClient"] == ["dwh"]  # app properties are merged into the task
 
 
 def test_http_error_is_qlik_error(keys):

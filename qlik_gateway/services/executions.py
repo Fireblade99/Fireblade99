@@ -6,7 +6,7 @@ from datetime import timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..config import Settings
+from ..config import Settings, get_settings
 from ..models import Client, ExecStatus, Execution, NodeHealth, QlikTask, utcnow
 from ..qlik import QlikBackend, QlikError, map_qlik_status
 from .audit import audit
@@ -20,9 +20,18 @@ log = logging.getLogger(__name__)
 # --------------------------------------------------------------------------------------
 # permissions
 # --------------------------------------------------------------------------------------
-def client_can_task(client: Client, task_id: str) -> bool:
+def client_can_task(client: Client, task_id: str, task: QlikTask | None = None) -> bool:
+    """Access is granted in the gateway UI (task list or "*") or in QMC via the client property."""
     allowed = client.allowed_tasks or []
-    return "*" in allowed or task_id in allowed
+    if "*" in allowed or task_id in allowed:
+        return True
+    return task is not None and client.name in granted_in_qlik(task)
+
+
+def granted_in_qlik(task: QlikTask) -> list[str]:
+    """Client names listed in the task's app/task custom property (e.g. GatewayClient)."""
+    prop = get_settings().qlik_client_custom_property
+    return list((task.custom_properties or {}).get(prop, [])) if prop else []
 
 
 def require_action(client: Client, action: str) -> None:
@@ -31,9 +40,9 @@ def require_action(client: Client, action: str) -> None:
 
 
 def require_task(db: Session, client: Client, task_id: str) -> QlikTask:
-    if not client_can_task(client, task_id):
-        raise ServiceError(403, "task_forbidden", f"Client '{client.name}' has no access to task {task_id}")
     task = db.get(QlikTask, task_id)
+    if not client_can_task(client, task_id, task):
+        raise ServiceError(403, "task_forbidden", f"Client '{client.name}' has no access to task {task_id}")
     if task is None or not task.present_in_qlik:
         raise ServiceError(404, "task_not_found", f"Task {task_id} is not in the gateway catalog")
     return task
@@ -41,9 +50,7 @@ def require_task(db: Session, client: Client, task_id: str) -> QlikTask:
 
 def visible_tasks(db: Session, client: Client) -> list[QlikTask]:
     q = select(QlikTask).where(QlikTask.present_in_qlik.is_(True)).order_by(QlikTask.name)
-    if "*" not in (client.allowed_tasks or []):
-        q = q.where(QlikTask.id.in_(client.allowed_tasks or [""]))
-    return list(db.scalars(q))
+    return [t for t in db.scalars(q) if client_can_task(client, t.id, t)]
 
 
 # --------------------------------------------------------------------------------------

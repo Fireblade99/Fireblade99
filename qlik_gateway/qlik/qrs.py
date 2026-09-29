@@ -171,7 +171,8 @@ class QrsJwtClient:
         """Reload tasks available through the gateway.
 
         A task qualifies if its app (vendor recommendation) or the task itself carries the
-        custom property, e.g. Source=Airflow. Without a configured property every task is listed.
+        custom property, e.g. ExternalRun=Yes. Without a configured property every task is listed.
+        The app's custom properties are merged into the task's (for GatewayClient-based access).
         """
         name, value = self.s.qlik_task_custom_property, self.s.qlik_task_custom_property_value
         resp = self._request("GET", "/qrs/reloadtask/full")
@@ -181,15 +182,25 @@ class QrsJwtClient:
         flt = f"customProperties.definition.name eq '{name}' and customProperties.value eq '{value}'"
         apps = self._request("GET", "/qrs/app/full", params={"filter": flt}).json() or []
         # QRS matches name and value independently, so re-check the pair
-        marked_apps = {
-            a["id"]
-            for a in apps
-            if any(
-                (cp.get("definition") or {}).get("name") == name and cp.get("value") == value
-                for cp in a.get("customProperties") or []
-            )
-        }
-        return [t for t in tasks if t.app_id in marked_apps or value in t.custom_properties.get(name, [])]
+        marked_apps: dict[str, dict[str, list[str]]] = {}
+        for a in apps:
+            cps: dict[str, list[str]] = {}
+            for cp in a.get("customProperties") or []:
+                cp_name = (cp.get("definition") or {}).get("name")
+                if cp_name:
+                    cps.setdefault(cp_name, []).append(cp.get("value"))
+            if value in cps.get(name, []):
+                marked_apps[a["id"]] = cps
+        result = []
+        for t in tasks:
+            if t.app_id in marked_apps:
+                for cp_name, values in marked_apps[t.app_id].items():
+                    merged = t.custom_properties.setdefault(cp_name, [])
+                    merged.extend(v for v in values if v not in merged)
+                result.append(t)
+            elif value in t.custom_properties.get(name, []):
+                result.append(t)
+        return result
 
     def get_task(self, task_id: str) -> TaskInfo | None:
         try:

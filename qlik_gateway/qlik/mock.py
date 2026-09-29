@@ -15,7 +15,9 @@ DEMO_TASKS = [
     TaskInfo("55555555-5555-5555-5555-555555555555", "Reload Marketing", False, "a5", "Marketing", "Sales"),
 ]
 for _t in DEMO_TASKS:
-    _t.custom_properties = {"Source": ["Airflow"]}
+    _t.custom_properties = {"ExternalRun": ["Yes"]}
+DEMO_TASKS[0].custom_properties["GatewayClient"] = ["airflow-dwh"]
+DEMO_TASKS[1].custom_properties["GatewayClient"] = ["airflow-dwh", "platform-ml"]
 
 
 def _now() -> datetime:
