@@ -146,6 +146,18 @@ class QrsJwtClient:
             return self._jwt
 
     def _request(self, method: str, path: str, *, params: dict | None = None, json=None) -> httpx.Response:
+        try:
+            return self._request_once(method, path, params=params, json=json)
+        except QlikError as e:
+            if e.status_code not in (401, 403):
+                raise
+            # The proxy session may predate a change on the Qlik side (license allocated, rule
+            # edited). Drop it and retry once with a fresh session.
+            log.info("Qlik answered %s, retrying %s %s with a new proxy session", e.status_code, method, path)
+            self._http.cookies.clear()
+            return self._request_once(method, path, params=params, json=json)
+
+    def _request_once(self, method: str, path: str, *, params: dict | None = None, json=None) -> httpx.Response:
         key = _xrfkey()
         params = dict(params or {})
         params["xrfkey"] = key

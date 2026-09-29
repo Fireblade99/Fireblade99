@@ -88,6 +88,10 @@ Update нужен для старта и остановки задачи. Чет
 
 Так шлюз физически не сможет запустить задачу без `ExternalRun=Yes`, даже при ошибке в конфигурации шлюза. Проверка: **Preview** внизу правила, пользователь `svc_qlik_gateway`.
 
+### Лицензия
+
+Сессии через virtual proxy требуют лицензии. Выделите сервисной учётке Professional access: QMC → License management → Professional access allocations → Allocate. Без неё старт задачи вернёт 403, а в `Log\Repository\Audit` будет запись `License … ManagementAccess … UsageDenied`. Шлюз ходит под одной учёткой, поэтому нужна ровно одна лицензия на все команды.
+
 ## 5. Балансировка reload на выделенные ноды
 
 Совет вендора: задачи, запускаемые через API, пометить custom property и балансировать на выделенный узел. QMC → **Load balancing rules** → **Create new**:

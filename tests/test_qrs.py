@@ -162,3 +162,18 @@ def test_ssl_verify_setting(tmp_path):
     assert isinstance(ssl_verify("system"), ssl.SSLContext)
     with pytest.raises(FileNotFoundError, match="CA file not found"):
         ssl_verify(str(tmp_path / "missing.pem"))
+
+
+def test_403_retries_once_with_fresh_session(keys):
+    seen = []
+
+    def handler(req: httpx.Request):
+        seen.append(req.headers.get("cookie"))
+        if len(seen) == 1:
+            return httpx.Response(403, text="Forbidden", headers={"set-cookie": "X-Qlik-Session-airflowgw=old"})
+        return httpx.Response(201, json={"value": E1})
+
+    c = make_client(keys, handler)
+    c._http.cookies.set("X-Qlik-Session-airflowgw", "stale")
+    assert c.start_task(TASK) == E1
+    assert len(seen) == 2 and "stale" in (seen[0] or "") and not seen[1]
