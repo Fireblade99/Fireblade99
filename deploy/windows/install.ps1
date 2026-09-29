@@ -108,23 +108,30 @@ if ($LASTEXITCODE) { throw "package install failed" }
 if ($LASTEXITCODE) { throw "gateway code reinstall failed" }
 
 Step "Launch scripts"
+# -P: do not put the working folder on sys.path, so a stray copy of the sources in the
+# install folder (e.g. C:\qgw\qlik_gateway) can never shadow the installed package.
+if ([version]$ver -lt [version]"3.11") { throw "Python 3.11+ required for the launch scripts (-P)" }
+foreach ($stray in "qlik_gateway", "deploy", "tests") {
+    $p = Join-Path $InstallDir $stray
+    if (Test-Path $p) { Write-Warning "$p is a stray copy of the sources and is not used; delete it" }
+}
 $runApi = @"
 @echo off
 rem Started by the "QlikGateway-API" scheduled task. Settings are read from .env in this folder.
 cd /d "%~dp0"
-"$Py" -m qlik_gateway.cli api --host 0.0.0.0 --port $Port --workers 1 >> "%~dp0logs\api.log" 2>&1
+"$Py" -P -m qlik_gateway.cli api --host 0.0.0.0 --port $Port --workers 1 >> "%~dp0logs\api.log" 2>&1
 "@
 $runWorker = @"
 @echo off
 rem Started by the "QlikGateway-Worker" scheduled task: the single coordinator that talks to Qlik.
 cd /d "%~dp0"
-"$Py" -m qlik_gateway.cli worker >> "%~dp0logs\worker.log" 2>&1
+"$Py" -P -m qlik_gateway.cli worker >> "%~dp0logs\worker.log" 2>&1
 "@
 $manage = @"
 @echo off
 rem Admin CLI, e.g.:  manage.cmd create-admin admin, manage.cmd create-client airflow-prod --tasks *
 cd /d "%~dp0"
-"$Py" -m qlik_gateway.cli %*
+"$Py" -P -m qlik_gateway.cli %*
 "@
 Set-Content (Join-Path $InstallDir "run-api.cmd") $runApi -Encoding ascii
 Set-Content (Join-Path $InstallDir "run-worker.cmd") $runWorker -Encoding ascii
