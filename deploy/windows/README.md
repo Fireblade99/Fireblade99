@@ -3,37 +3,55 @@
 Всё ставится одним скриптом. Он делает следующее:
 - создаёт `C:\qgw` с папками `app`, `venv`, `data`, `logs` и `secrets`;
 - ставит Python-пакеты через Nexus;
-- ставит PostgreSQL на эту же ноду, создаёт базу `qlik_gateway` и пользователя `qgw`;
+- ставит PostgreSQL на эту же ноду (установщиком или распаковкой архива), создаёт базу `qlik_gateway` и пользователя `qgw`;
 - генерирует `.env` со случайными паролями;
 - регистрирует две задачи в Планировщике: `QlikGateway-API` и `QlikGateway-Worker`. Они запускаются от SYSTEM при старте Windows и перезапускаются при падении;
 - открывает порт 8080 в брандмауэре Windows.
 
 ## Что нужно заранее
 
-1. **Python 3.10+.** Ставится установщиком с python.org (или из Nexus raw) с галочкой *Install for all users*.
-2. **Дистрибутив PostgreSQL для Windows от EDB**, например `postgresql-16.x-windows-x64.exe`. Скачайте его с enterprisedb.com или возьмите из Nexus и положите на ноду.
-3. **Адрес PyPI-прокси в Nexus**, например `https://nexus.company.local/repository/pypi-proxy/simple`.
-4. **Проект**, распакованный в любую папку, например `C:\distr\qlik-gateway`.
+Выберите вариант в зависимости от того, разрешены ли на сервере установщики.
 
-## Установка
+### Вариант А: установщики запрещены политикой (ошибка `0x80070659`)
+
+Ничего не устанавливается, всё распаковывается из архивов в `C:\qgw`. Скачайте на свой ПК и перенесите на ноду:
+
+| Что | Откуда | Файл |
+|---|---|---|
+| Python (переносимый) | https://www.nuget.org/packages/python/3.12.10 → **Download package** (или nuget-прокси в Nexus) | `python.3.12.10.nupkg` |
+| PostgreSQL (переносимый) | https://www.enterprisedb.com/download-postgresql-binaries → Windows x86-64, версия 16 | `postgresql-16.x-windows-x64-binaries.zip` |
+| Проект | архив ветки из GitHub | распаковать, например, в `C:\distr\qlik-gateway` |
 
 PowerShell от администратора:
 
 ```powershell
 cd C:\distr\qlik-gateway
 powershell -ExecutionPolicy Bypass -File deploy\windows\install.ps1 `
-    -IndexUrl https://nexus.company.local/repository/pypi-proxy/simple `
-    -PgInstaller C:\distr\postgresql-16.4-1-windows-x64.exe `
+    -IndexUrl https://<nexus>/repository/<pypi-proxy>/simple `
+    -PythonPackage C:\distr\python.3.12.10.nupkg `
+    -PgZip C:\distr\postgresql-16.x-windows-x64-binaries.zip `
     -PgDataDir D:\pgdata
 ```
 
-`-PgDataDir` — папка для данных базы; укажите её на большом диске.
+- Postgres регистрируется как служба Windows `qgw-postgresql` и слушает только `localhost:5432`.
+- Если `initdb` ругается на `VCRUNTIME140.dll`, на сервере нет Visual C++ Redistributable 2015–2022. Попросите админов его поставить: это стандартный пакет, обычно он уже есть.
 
-Если сертификат Nexus не доверенный, добавьте `-TrustedHost nexus.company.local`.
+### Вариант Б: установщики разрешены
 
-В конце скрипт напечатает **пароль admin для UI** и проверит `/healthz`. После этого откройте `http://<нода>:8080/ui/`.
+Поставьте Python 3.10+ с галочкой *Install for all users*, скачайте EDB-установщик PostgreSQL и выполните:
 
-Пароль суперпользователя PostgreSQL сохраняется в `C:\qgw\secrets\postgres_superuser.txt`. Доступ к этой папке есть только у Administrators и SYSTEM.
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\windows\install.ps1 `
+    -IndexUrl https://<nexus>/repository/<pypi-proxy>/simple `
+    -PgInstaller C:\distr\postgresql-16.x-windows-x64.exe -PgDataDir D:\pgdata
+```
+
+### Общее
+
+- `-PgDataDir` — папка для данных базы; укажите её на большом диске.
+- Если сертификат Nexus не доверенный, добавьте `-TrustedHost <nexus-host>`.
+- В конце скрипт напечатает **пароль admin для UI** и проверит `/healthz`. После этого откройте `http://<нода>:8080/ui/`.
+- Пароль суперпользователя Postgres сохраняется в `C:\qgw\secrets\postgres_superuser.txt`. Доступ к этой папке есть только у Administrators и SYSTEM.
 
 ## Повседневные действия
 
@@ -41,6 +59,7 @@ powershell -ExecutionPolicy Bypass -File deploy\windows\install.ps1 `
 |---|---|
 | Поправить настройки | отредактировать `C:\qgw\.env`, затем выполнить `C:\qgw\restart.cmd` от администратора |
 | Логи | `C:\qgw\logs\api.log`, `C:\qgw\logs\worker.log` |
+| Перезапустить | `C:\qgw\restart.cmd` от администратора |
 | Сменить пароль admin | `C:\qgw\manage.cmd create-admin admin` |
 | Статус задач | `Get-ScheduledTask QlikGateway-*` или Планировщик заданий |
 | Обновить версию | распаковать новый архив и заново запустить `install.ps1` с теми же параметрами: `.env` и база сохранятся, пароль пользователя БД `qgw` перегенерируется и пропишется в `.env` |

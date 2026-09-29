@@ -22,9 +22,11 @@ param(
     [string]$IndexUrl = "",            # Nexus PyPI proxy, e.g. https://nexus/repository/pypi-proxy/simple
     [string]$TrustedHost = "",         # set to the Nexus host if its certificate is not trusted by pip
     [string]$Python = "",              # path to python.exe (3.10+); autodetected if empty
+    [string]$PythonPackage = "",       # portable Python, no installer: python.3.12.x.nupkg from nuget.org (or its .zip)
     [int]$Port = 8080,
     [string]$DatabaseUrl = "",         # existing PostgreSQL (postgresql+psycopg://user:pass@host:5432/db)
     [string]$PgInstaller = "",         # EDB PostgreSQL installer .exe -> installs PostgreSQL on this node
+    [string]$PgZip = "",               # portable PostgreSQL, no installer: EDB "binaries" zip (postgresql-16.x-windows-x64-binaries.zip)
     [string]$PgDataDir = "C:\pgdata",  # data directory for the local PostgreSQL (put it on the big disk)
     [string]$PgPrefix = "C:\Program Files\PostgreSQL\16",
     [int]$PgPort = 5432,
@@ -36,46 +38,125 @@ function Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 $src = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 if (-not (Test-Path (Join-Path $src "pyproject.toml"))) { throw "pyproject.toml not found in $src" }
 
-Step "Python"
-if (-not $Python) {
-    $cmd = Get-Command py -ErrorAction SilentlyContinue
-    if ($cmd) { $Python = (& py -3 -c "import sys; print(sys.executable)").Trim() }
-    else {
-        $cmd = Get-Command python -ErrorAction SilentlyContinue
-        if (-not $cmd) { throw "Python 3.10+ not found. Install it (python.org installer, 'Install for all users') or pass -Python" }
-        $Python = $cmd.Source
-    }
-}
-$ver = & $Python -c "import sys; print('%d.%d' % sys.version_info[:2])"
-Write-Host "Using $Python ($ver)"
-if ([version]$ver -lt [version]"3.10") { throw "Python 3.10+ required, found $ver" }
-
 Step "Folders in $InstallDir"
 foreach ($d in @("", "app", "data", "logs", "secrets")) { New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir $d) | Out-Null }
 # copy the project (without tests/.git) so the install does not depend on where the archive was unpacked
 robocopy $src (Join-Path $InstallDir "app") /MIR /XD .git tests __pycache__ venv .venv /XF *.db .env /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed ($LASTEXITCODE)" }
-Copy-Item (Join-Path $PSScriptRoot "*.cmd") $InstallDir -Force
 
-Step "Virtual environment + packages"
-$venv = Join-Path $InstallDir "venv"
-if (-not (Test-Path (Join-Path $venv "Scripts\python.exe"))) { & $Python -m venv $venv }
-$pip = @("-m", "pip", "install", "--disable-pip-version-check")
+function Expand-AnyArchive($archive, $dest) {
+    # Expand-Archive only accepts *.zip, a .nupkg is a zip as well
+    $tmp = Join-Path $env:TEMP ("qgw_" + [guid]::NewGuid().ToString("N") + ".zip")
+    Copy-Item $archive $tmp
+    Expand-Archive -Path $tmp -DestinationPath $dest -Force
+    Remove-Item $tmp
+}
+
+Step "Python"
+if ($PythonPackage) {
+    # Portable Python: no MSI, works where installers are blocked by policy. Used directly, without a venv.
+    $pyDir = Join-Path $InstallDir "python"
+    if (-not (Test-Path (Join-Path $pyDir "python.exe"))) {
+        if (-not (Test-Path $PythonPackage)) { throw "Python package not found: $PythonPackage" }
+        $tmpDir = Join-Path $env:TEMP ("qgw_py_" + [guid]::NewGuid().ToString("N"))
+        Expand-AnyArchive $PythonPackage $tmpDir
+        $exe = Get-ChildItem $tmpDir -Recurse -Filter python.exe | Select-Object -First 1
+        if (-not $exe) { throw "python.exe not found inside $PythonPackage" }
+        New-Item -ItemType Directory -Force -Path $pyDir | Out-Null
+        Copy-Item (Join-Path $exe.DirectoryName "*") $pyDir -Recurse -Force
+        Remove-Item $tmpDir -Recurse -Force
+    }
+    $Py = Join-Path $pyDir "python.exe"
+    & $Py -m pip --version *> $null
+    if ($LASTEXITCODE) { & $Py -m ensurepip --default-pip; if ($LASTEXITCODE) { throw "ensurepip failed" } }
+} else {
+    if (-not $Python) {
+        $cmd = Get-Command py -ErrorAction SilentlyContinue
+        if ($cmd) { $Python = (& py -3 -c "import sys; print(sys.executable)").Trim() }
+        else {
+            $cmd = Get-Command python -ErrorAction SilentlyContinue
+            if (-not $cmd) { throw "Python 3.10+ not found. Install it, or use -PythonPackage <python.3.12.x.nupkg> if installers are blocked" }
+            $Python = $cmd.Source
+        }
+    }
+    $venv = Join-Path $InstallDir "venv"
+    if (-not (Test-Path (Join-Path $venv "Scripts\python.exe"))) { & $Python -m venv $venv; if ($LASTEXITCODE) { throw "venv failed" } }
+    $Py = Join-Path $venv "Scripts\python.exe"
+}
+$ver = & $Py -c "import sys; print('%d.%d' % sys.version_info[:2])"
+Write-Host "Using $Py ($ver)"
+if ([version]$ver -lt [version]"3.10") { throw "Python 3.10+ required, found $ver" }
+
+Step "Packages"
+$pip = @("-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location")
 if ($IndexUrl) { $pip += @("--index-url", $IndexUrl) }
 if ($TrustedHost) { $pip += @("--trusted-host", $TrustedHost) }
-& (Join-Path $venv "Scripts\python.exe") @pip --upgrade pip
-if ($LASTEXITCODE) { throw "pip upgrade failed" }
-& (Join-Path $venv "Scripts\python.exe") @pip ((Join-Path $InstallDir "app") + "[postgres]")
+& $Py @pip --upgrade pip
+if ($LASTEXITCODE) { throw "pip upgrade failed (check -IndexUrl / -TrustedHost)" }
+& $Py @pip ((Join-Path $InstallDir "app") + "[postgres]")
 if ($LASTEXITCODE) { throw "package install failed" }
 
+Step "Launch scripts"
+$runApi = @"
+@echo off
+rem Started by the "QlikGateway-API" scheduled task. Settings are read from .env in this folder.
+cd /d "%~dp0"
+"$Py" -m qlik_gateway.cli api --host 0.0.0.0 --port $Port --workers 1 >> "%~dp0logs\api.log" 2>&1
+"@
+$runWorker = @"
+@echo off
+rem Started by the "QlikGateway-Worker" scheduled task: the single coordinator that talks to Qlik.
+cd /d "%~dp0"
+"$Py" -m qlik_gateway.cli worker >> "%~dp0logs\worker.log" 2>&1
+"@
+$manage = @"
+@echo off
+rem Admin CLI, e.g.:  manage.cmd create-admin admin, manage.cmd create-client airflow-prod --tasks *
+cd /d "%~dp0"
+"$Py" -m qlik_gateway.cli %*
+"@
+Set-Content (Join-Path $InstallDir "run-api.cmd") $runApi -Encoding ascii
+Set-Content (Join-Path $InstallDir "run-worker.cmd") $runWorker -Encoding ascii
+Set-Content (Join-Path $InstallDir "manage.cmd") $manage -Encoding ascii
+Copy-Item (Join-Path $PSScriptRoot "restart.ps1"), (Join-Path $PSScriptRoot "restart.cmd") $InstallDir -Force
 
 function New-Password([int]$n = 24) { -join ((48..57) + (65..90) + (97..122) | Get-Random -Count $n | ForEach-Object { [char]$_ }) }
 
+if ($PgZip) {
+    Step "Portable PostgreSQL (no installer)"
+    $PgPrefix = Join-Path $InstallDir "pgsql"
+    $superFile = Join-Path $InstallDir "secrets\postgres_superuser.txt"
+    if (-not (Test-Path (Join-Path $PgPrefix "bin\pg_ctl.exe"))) {
+        if (-not (Test-Path $PgZip)) { throw "PostgreSQL zip not found: $PgZip" }
+        Expand-AnyArchive $PgZip $InstallDir      # the EDB zip contains a top-level "pgsql" folder
+        if (-not (Test-Path (Join-Path $PgPrefix "bin\pg_ctl.exe"))) { throw "pgsql\bin\pg_ctl.exe not found after unpacking $PgZip" }
+    }
+    if (-not (Test-Path (Join-Path $PgDataDir "PG_VERSION"))) {
+        $super = New-Password
+        Set-Content -Path $superFile -Value $super -Encoding ascii
+        $pwFile = Join-Path $env:TEMP "qgw_pw.txt"; Set-Content $pwFile $super -Encoding ascii
+        New-Item -ItemType Directory -Force -Path $PgDataDir | Out-Null
+        & (Join-Path $PgPrefix "bin\initdb.exe") -D $PgDataDir -U postgres -E UTF8 --auth=scram-sha-256 "--pwfile=$pwFile"
+        $rc = $LASTEXITCODE; Remove-Item $pwFile
+        if ($rc) { throw "initdb failed ($rc). If it complains about VCRUNTIME140.dll, the Visual C++ 2015-2022 runtime is missing on this server" }
+        Write-Host "postgres superuser password saved to $superFile"
+    }
+    # the service runs as NETWORK SERVICE; give it the data directory
+    icacls $PgDataDir /grant "NT AUTHORITY\NetworkService:(OI)(CI)F" /T /Q | Out-Null
+    if (-not (Get-Service qgw-postgresql -ErrorAction SilentlyContinue)) {
+        & (Join-Path $PgPrefix "bin\pg_ctl.exe") register -N qgw-postgresql -D $PgDataDir -S auto -o "-p $PgPort"
+        if ($LASTEXITCODE) { throw "pg_ctl register failed" }
+    }
+    Start-Service qgw-postgresql
+    Start-Sleep -Seconds 3
+    $PgInstaller = "__portable__"   # reuse the database/role creation below
+}
+
 if ($PgInstaller) {
-    Step "PostgreSQL on this node"
+    Step "PostgreSQL database"
     $psql = Join-Path $PgPrefix "bin\psql.exe"
     $superFile = Join-Path $InstallDir "secrets\postgres_superuser.txt"
-    if (-not (Test-Path $psql)) {
+    if (-not (Test-Path $psql) -and $PgInstaller -ne "__portable__") {
         if (-not (Test-Path $PgInstaller)) { throw "PostgreSQL installer not found: $PgInstaller" }
         $super = New-Password
         New-Item -ItemType Directory -Force -Path $PgDataDir | Out-Null
