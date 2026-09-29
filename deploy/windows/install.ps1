@@ -132,13 +132,22 @@ if ($PgZip) {
         if (-not (Test-Path (Join-Path $PgPrefix "bin\pg_ctl.exe"))) { throw "pgsql\bin\pg_ctl.exe not found after unpacking $PgZip" }
     }
     if (-not (Test-Path (Join-Path $PgDataDir "PG_VERSION"))) {
+        if ((Test-Path $PgDataDir) -and (Get-ChildItem $PgDataDir -Force | Select-Object -First 1)) {
+            throw "$PgDataDir is not empty but has no database in it (a failed earlier attempt?). Empty or delete the folder and re-run"
+        }
         $super = New-Password
         Set-Content -Path $superFile -Value $super -Encoding ascii
         $pwFile = Join-Path $env:TEMP "qgw_pw.txt"; Set-Content $pwFile $super -Encoding ascii
         New-Item -ItemType Directory -Force -Path $PgDataDir | Out-Null
-        & (Join-Path $PgPrefix "bin\initdb.exe") -D $PgDataDir -U postgres -E UTF8 --auth=scram-sha-256 "--pwfile=$pwFile"
+        # initdb drops administrator rights before touching the data directory, so the plain
+        # current user must own it (a folder created from an elevated shell belongs to Administrators)
+        $me = "$env:USERDOMAIN\$env:USERNAME"
+        icacls $PgDataDir /setowner $me /T /Q | Out-Null
+        icacls $PgDataDir /grant "${me}:(OI)(CI)F" /T /Q | Out-Null
+        icacls $pwFile /grant "${me}:R" /Q | Out-Null
+        & (Join-Path $PgPrefix "bin\initdb.exe") -D $PgDataDir -U postgres -E UTF8 --locale=C --auth=scram-sha-256 "--pwfile=$pwFile"
         $rc = $LASTEXITCODE; Remove-Item $pwFile
-        if ($rc) { throw "initdb failed ($rc). If it complains about VCRUNTIME140.dll, the Visual C++ 2015-2022 runtime is missing on this server" }
+        if ($rc) { throw "initdb failed ($rc), see the message above. VCRUNTIME140.dll missing = install the Visual C++ 2015-2022 runtime. Before re-running, empty $PgDataDir" }
         Write-Host "postgres superuser password saved to $superFile"
     }
     # the service runs as NETWORK SERVICE; give it the data directory
