@@ -25,6 +25,11 @@ from .services.metrics import API_REQUESTS
 log = logging.getLogger("qlik_gateway")
 
 
+class UTF8JSONResponse(JSONResponse):
+    # explicit charset: Windows PowerShell 5.1 otherwise decodes UTF-8 bodies as Latin-1
+    media_type = "application/json; charset=utf-8"
+
+
 def _bootstrap_admin(settings: Settings) -> None:
     if not (settings.bootstrap_admin_user and settings.bootstrap_admin_password):
         return
@@ -59,6 +64,7 @@ def create_app(settings: Settings | None = None, backend=None) -> FastAPI:
         app.state.backend.close()
 
     app = FastAPI(
+        default_response_class=UTF8JSONResponse,
         title="Qlik Gateway",
         version="0.1.0",
         description="Buffer service between external schedulers (Airflow, platform teams) and Qlik Sense.",
@@ -106,7 +112,7 @@ def create_app(settings: Settings | None = None, backend=None) -> FastAPI:
     async def service_error(request: Request, exc: ServiceError):
         if isinstance(getattr(request.state, "audit", None), dict):
             request.state.audit["error"] = f"{exc.code}: {exc.message}"
-        return JSONResponse({"error": exc.code, "message": exc.message}, status_code=exc.status_code)
+        return UTF8JSONResponse({"error": exc.code, "message": exc.message}, status_code=exc.status_code)
 
     @app.exception_handler(admin.NotLoggedIn)
     async def not_logged_in(request: Request, exc):

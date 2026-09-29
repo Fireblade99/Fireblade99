@@ -215,3 +215,10 @@ def test_access_granted_via_qlik_custom_property(http, coordinator, make_client)
     assert http.post(f"/api/v1/tasks/{SALES}/start", headers=ml).status_code == 403
     assert {t["id"] for t in http.get("/api/v1/tasks", headers=ml).json()} == {HR}
     assert {t["id"] for t in http.get("/api/v1/tasks", headers=dwh).json()} == {SALES, HR}
+
+
+def test_json_declares_utf8(http, coordinator, make_client):
+    _, h = make_client()
+    r = http.get("/api/v1/whoami", headers=h)
+    assert r.headers["content-type"] == "application/json; charset=utf-8"
+    assert http.get("/api/v1/whoami").headers["content-type"] == "application/json; charset=utf-8"
