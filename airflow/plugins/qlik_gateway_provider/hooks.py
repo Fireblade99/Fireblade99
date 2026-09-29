@@ -47,7 +47,8 @@ class QlikGatewayHook(BaseHook):
             conn = self.get_connection(self.gateway_conn_id)
             host = conn.host or ""
             if not host.startswith("http"):
-                host = f"{conn.schema or 'https'}://{host}"
+                # like Airflow's HttpHook: the Schema field is the protocol, http by default
+                host = f"{conn.schema or 'http'}://{host}"
             if conn.port:
                 host = f"{host.rstrip('/')}:{conn.port}"
             self._base = host.rstrip("/")

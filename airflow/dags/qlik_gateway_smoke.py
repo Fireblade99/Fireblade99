@@ -8,16 +8,22 @@
 Needs the connection `qlik_gateway_default` (HTTP, host/port of the gateway, password = client token).
 """
 
+import os
+import sys
 from datetime import datetime
 
-from airflow import DAG
-from airflow.models.param import Param
-from qlik_gateway_provider import QlikExecutionSensor, QlikGatewayHook, QlikReloadOperator
+# The provider may sit next to this file (e.g. dags/qlik_gateway_provider/ in a DAG bundle
+# subfolder that is not on sys.path): make it importable either way.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from qlik_gateway_provider import QlikExecutionSensor, QlikGatewayHook, QlikReloadOperator  # noqa: E402
 
 try:  # Airflow 3
-    from airflow.sdk import task
+    from airflow.sdk import DAG, Param, task
 except ImportError:  # Airflow 2
+    from airflow import DAG
     from airflow.decorators import task
+    from airflow.models.param import Param
 
 
 with DAG(
