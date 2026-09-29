@@ -3,7 +3,14 @@ import time
 
 import requests
 
-from ._compat import AirflowException, BaseHook
+try:
+    from ._compat import AirflowException, BaseHook
+except ImportError:  # parsed on its own by the DAG processor (not covered by .airflowignore)
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from qlik_gateway_provider._compat import AirflowException, BaseHook
 
 TERMINAL = {"SUCCESS", "FAILED", "ABORTED", "SKIPPED", "CANCELLED", "START_ERROR", "LOST", "TIMEOUT"}
 

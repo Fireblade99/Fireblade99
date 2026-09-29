@@ -9,7 +9,14 @@ try:
 except ImportError:  # pragma: no cover
     from airflow.sdk.bases.trigger import BaseTrigger, TriggerEvent  # type: ignore
 
-from .hooks import TERMINAL, QlikGatewayHook
+try:
+    from .hooks import TERMINAL, QlikGatewayHook
+except ImportError:  # parsed on its own by the DAG processor (not covered by .airflowignore)
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from qlik_gateway_provider.hooks import TERMINAL, QlikGatewayHook
 
 
 class QlikGatewayExecutionTrigger(BaseTrigger):

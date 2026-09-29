@@ -1,8 +1,16 @@
 from collections.abc import Sequence
 from datetime import timedelta
 
-from ._compat import AirflowException, BaseOperator
-from .hooks import QlikGatewayHook
+try:
+    from ._compat import AirflowException, BaseOperator
+    from .hooks import QlikGatewayHook
+except ImportError:  # parsed on its own by the DAG processor (not covered by .airflowignore)
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from qlik_gateway_provider._compat import AirflowException, BaseOperator
+    from qlik_gateway_provider.hooks import QlikGatewayHook
 
 
 class QlikReloadOperator(BaseOperator):
