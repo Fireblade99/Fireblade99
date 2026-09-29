@@ -67,7 +67,7 @@ powershell -ExecutionPolicy Bypass -File deploy\windows\install.ps1 `
 
 ## Переход на настоящий Qlik
 
-1. Сгенерируйте ключ JWT. Если на ноде нет `openssl`, подойдёт Git for Windows (в нём есть `openssl.exe`), либо сгенерируйте ключ на любой Linux-машине. Файл `qlik_jwt_private.pem` положите в `C:\qgw\secrets\`, а `qlik_jwt_public.crt` передайте админу Qlik. Порядок настройки для админа — в `docs/qlik-setup.md`.
+1. Сгенерируйте ключ JWT: `C:\qgw\manage.cmd gen-jwt-keys --out C:\qgw\secrets`, openssl для этого не нужен. Файл `qlik_jwt_private.pem` положите в `C:\qgw\secrets\`, а `qlik_jwt_public.crt` передайте админу Qlik. Порядок настройки для админа — в `docs/qlik-setup.md`.
 2. В `C:\qgw\.env` пропишите:
    ```
    QGW_QLIK_MODE=jwt

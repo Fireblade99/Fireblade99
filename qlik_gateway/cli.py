@@ -59,6 +59,15 @@ def cmd_create_client(args) -> None:
     print(f"client '{args.name}' created. Token (shown once, store it in an Airflow connection):\n{token}")
 
 
+def cmd_gen_jwt_keys(args) -> None:
+    from .keys import generate_jwt_keys
+
+    key, cert, until = generate_jwt_keys(args.out, days=args.days, common_name=args.cn, force=args.force)
+    print(f"private key (keep on the gateway only): {key}")
+    print(f"certificate (give to the Qlik admin for the virtual proxy): {cert}")
+    print(f"valid until: {until:%Y-%m-%d}")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="qlik-gateway")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -85,8 +94,15 @@ def main() -> None:
     c.add_argument("--tasks", default="", help="comma separated Qlik task ids, or *")
     c.set_defaults(fn=cmd_create_client)
 
+    k = sub.add_parser("gen-jwt-keys", help="generate the JWT private key + certificate for the Qlik virtual proxy")
+    k.add_argument("--out", default="./secrets")
+    k.add_argument("--days", type=int, default=730)
+    k.add_argument("--cn", default="qlik-gateway")
+    k.add_argument("--force", action="store_true")
+    k.set_defaults(fn=cmd_gen_jwt_keys)
+
     args = p.parse_args()
-    if args.cmd not in ("api", "worker"):
+    if args.cmd not in ("api", "worker", "gen-jwt-keys"):
         init_engine(get_settings().database_url)
     args.fn(args)
 

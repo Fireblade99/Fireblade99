@@ -8,6 +8,8 @@
 
 Выполняется на хосте шлюза. Приватный ключ хранится только там.
 
+Без openssl (например, на Windows) ключ создаёт сам шлюз: `qlik-gateway gen-jwt-keys --out ./secrets`, на Windows `C:\qgw\manage.cmd gen-jwt-keys --out C:\qgw\secrets`. Вариант с openssl:
+
 ```bash
 mkdir -p secrets && cd secrets
 openssl req -x509 -nodes -days 730 -newkey rsa:4096 \

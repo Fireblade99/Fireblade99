@@ -137,3 +137,14 @@ def test_http_error_is_qlik_error(keys):
     with pytest.raises(QlikError) as e:
         c.start_task(TASK)
     assert e.value.status_code == 403
+
+
+def test_generated_keys_work_for_jwt(tmp_path):
+    from cryptography import x509
+
+    from qlik_gateway.keys import generate_jwt_keys
+
+    key_path, cert_path, _ = generate_jwt_keys(str(tmp_path), days=10)
+    cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    token = jwt.encode({"userId": "u"}, key_path.read_bytes(), algorithm="RS256")
+    assert jwt.decode(token, cert.public_key(), algorithms=["RS256"])["userId"] == "u"
