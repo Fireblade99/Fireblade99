@@ -93,3 +93,22 @@ def test_audit_filters_and_pagination(http, coordinator, make_client):
     assert "Показано 1–1 из 1" in only_old and "10.1.2.3" in only_old
     assert "Показано 1–1 из 1" in http.get("/ui/audit?ip=10.1.2").text
     assert http.get("/ui/audit?per_page=7&page=999&date_from=garbage").status_code == 200
+
+
+def test_ui_time_zone(http, coordinator, settings, monkeypatch):
+    from datetime import datetime
+
+    from qlik_gateway.api import admin
+    from qlik_gateway.db import session_scope
+    from qlik_gateway.models import AuditLog
+
+    monkeypatch.setattr(admin, "get_settings", lambda: settings)
+    settings.ui_utc_offset_hours = 5
+    _login(http)
+    with session_scope() as db:
+        db.add(AuditLog(actor_type="system", actor="tz-probe", action="x", ts=datetime(2026, 9, 29, 7, 0, 0)))
+    page = http.get("/ui/audit?actor=tz-probe").text
+    assert "2026-09-29 12:00:00" in page and "UTC+5" in page  # stored 07:00 UTC -> shown 12:00 UTC+5
+    # the filter is typed in UTC+5: 11:59 local = 06:59 UTC -> includes the 07:00 UTC record
+    assert "Показано 1–1 из 1" in http.get("/ui/audit?actor=tz-probe&date_from=2026-09-29T11:59").text
+    assert "Нет записей" in http.get("/ui/audit?actor=tz-probe&date_from=2026-09-29T12:01").text

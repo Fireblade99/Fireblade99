@@ -51,8 +51,8 @@
 <div><label>Приоритет (меньше — раньше)</label><input type="number" name="priority" value="{{ c.priority }}"></div>
 </div>
 <div class="muted small">0 = без ограничения</div>
-<label>Токен действует до (UTC, пусто = бессрочно)</label>
-<input type="datetime-local" name="token_expires_at" value="{{ c.token_expires_at.strftime('%Y-%m-%dT%H:%M') if c.token_expires_at else '' }}">
+<label>Токен действует до ({{ tz_label() }}, пусто = бессрочно)</label>
+<input type="datetime-local" name="token_expires_at" value="{{ c.token_expires_at|dt_input }}">
 <p><button class="primary">{% if is_new %}Создать и выдать токен{% else %}Сохранить{% endif %}</button></p>
 </form>
 

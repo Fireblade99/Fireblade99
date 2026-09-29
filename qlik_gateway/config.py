@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # Bootstrap admin, created on startup if no admins exist yet.
     bootstrap_admin_user: str | None = None
     bootstrap_admin_password: str | None = None
+    # Time zone of the admin UI (display and date inputs), as a fixed offset from UTC in hours.
+    # The database and the client API always use UTC.
+    ui_utc_offset_hours: float = 5.0
     # Trust X-Forwarded-For from a reverse proxy when recording caller IPs.
     trust_forwarded_for: bool = False
 

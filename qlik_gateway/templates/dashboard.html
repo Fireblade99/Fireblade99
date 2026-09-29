@@ -1,11 +1,11 @@
 {% extends "base.html" %}{% block head %}<meta http-equiv="refresh" content="30">{% endblock %}
 {% block content %}
-<h1>Мониторинг <span class="muted small">обновляется каждые 30 с · UTC</span></h1>
+<h1>Мониторинг <span class="muted small">обновляется каждые 30 с · {{ tz_label() }}</span></h1>
 
 <div class="card" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
 {% if paused %}
   <span class="badge bad">ЗАПУСК В QLIK ПРИОСТАНОВЛЕН</span>
-  <span class="small">кем: {{ paused.by }} · {{ paused.at }} · {{ paused.reason }}</span>
+  <span class="small">кем: {{ paused.by }} · {{ paused.at|iso_dt }} · {{ paused.reason }}</span>
   <form class="inline" method="post" action="/ui/dispatch"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="pause" value="0"><button class="primary">Возобновить</button></form>
 {% else %}
   <span class="badge ok">Запуск в Qlik активен</span>

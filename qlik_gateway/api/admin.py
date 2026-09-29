@@ -34,7 +34,35 @@ STATUS_CLASS = {
     ExecStatus.CANCELLED: "muted",
 }
 templates.env.globals["status_class"] = lambda s: STATUS_CLASS.get(s, "bad")
-templates.env.filters["dt"] = lambda d: d.strftime("%Y-%m-%d %H:%M:%S") if d else "—"
+
+
+def ui_offset() -> timedelta:
+    return timedelta(hours=get_settings().ui_utc_offset_hours)
+
+
+def to_local(d: datetime | None) -> datetime | None:
+    """UTC (as stored) -> UI time zone."""
+    return d + ui_offset() if d else None
+
+
+def from_local(d: datetime | None) -> datetime | None:
+    """UI time zone (as typed by an admin) -> UTC."""
+    return d - ui_offset() if d else None
+
+
+def tz_label() -> str:
+    h = get_settings().ui_utc_offset_hours
+    if not h:
+        return "UTC"
+    sign = "+" if h > 0 else "-"
+    hours, minutes = divmod(round(abs(h) * 60), 60)
+    return f"UTC{sign}{hours}" + (f":{minutes:02d}" if minutes else "")
+
+
+templates.env.filters["dt"] = lambda d: to_local(d).strftime("%Y-%m-%d %H:%M:%S") if d else "—"
+templates.env.filters["dt_input"] = lambda d: to_local(d).strftime("%Y-%m-%dT%H:%M") if d else ""
+templates.env.globals["tz_label"] = tz_label
+templates.env.filters["iso_dt"] = lambda s: templates.env.filters["dt"](datetime.fromisoformat(s)) if s else "—"
 templates.env.filters["dur"] = lambda s: "—" if s is None else (f"{s:.0f}с" if s < 120 else f"{s / 60:.1f}м")
 
 
@@ -309,7 +337,7 @@ def _apply_client_form(c: Client, form) -> None:
     c.max_concurrent = int(form.get("max_concurrent") or 0)
     c.priority = int(form.get("priority") or 100)
     exp = str(form.get("token_expires_at", "")).strip()
-    c.token_expires_at = datetime.fromisoformat(exp) if exp else None
+    c.token_expires_at = from_local(datetime.fromisoformat(exp)) if exp else None
 
 
 @router.post("/clients/new", dependencies=[Depends(check_csrf)])
@@ -607,7 +635,7 @@ def audit_page(
     if target:  # task id (or its beginning) or execution number
         t = target.strip().lstrip("#")
         conds.append((AuditLog.execution_id == int(t)) if t.isdigit() else AuditLog.task_id.ilike(f"{t}%"))
-    dt_from, dt_to = _parse_dt(date_from), _parse_dt(date_to)
+    dt_from, dt_to = from_local(_parse_dt(date_from)), from_local(_parse_dt(date_to))
     if dt_from:
         conds.append(AuditLog.ts >= dt_from)
     if dt_to:
@@ -632,7 +660,7 @@ def audit_page(
         "date_to": date_to,
         "per_page": per_page,
     }
-    now = utcnow()
+    now = to_local(utcnow())
     presets = [
         (label, urlencode({**{k: v for k, v in f.items() if v}, "date_from": _fmt_dt(now - delta), "date_to": ""}))
         for label, delta in (
@@ -664,7 +692,7 @@ PAGE_SIZES = (20, 50, 100)
 
 
 def _parse_dt(value: str) -> datetime | None:
-    """<input type=datetime-local> value (UTC) -> naive UTC datetime."""
+    """<input type=datetime-local> value (UI time zone, converted by the caller)."""
     try:
         return datetime.fromisoformat(value.strip()) if value.strip() else None
     except ValueError:

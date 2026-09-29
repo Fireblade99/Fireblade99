@@ -217,6 +217,7 @@ if (Test-Path $envFile) {
 # ---- web / UI ----
 QGW_SECRET_KEY=$secret
 QGW_SESSION_HTTPS_ONLY=false
+QGW_UI_UTC_OFFSET_HOURS=5
 QGW_BOOTSTRAP_ADMIN_USER=admin
 QGW_BOOTSTRAP_ADMIN_PASSWORD=$adminPass
 
