@@ -1,0 +1,38 @@
+<#
+.SYNOPSIS
+  Quick update of the gateway code only. .env, the database, Python and PostgreSQL are not touched.
+
+.EXAMPLE
+  # unpack the new archive over C:\qlik-gateway, then (as Administrator):
+  powershell -ExecutionPolicy Bypass -File C:\qlik-gateway\deploy\windows\update.ps1 -IndexUrl https://nexus/repository/pypi-proxy/simple
+#>
+param(
+    [string]$Src = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
+    [string]$IndexUrl = "",
+    [string]$TrustedHost = "",
+    [string]$InstallDir = "C:\qgw",
+    [int]$Port = 8080
+)
+$ErrorActionPreference = "Stop"
+$py = Get-ChildItem (Join-Path $InstallDir "python\python.exe"), (Join-Path $InstallDir "venv\Scripts\python.exe") -ErrorAction SilentlyContinue |
+    Select-Object -First 1 -ExpandProperty FullName
+if (-not $py) { throw "Python of the gateway not found in $InstallDir" }
+
+Write-Host "==> stop"
+foreach ($n in "QlikGateway-API", "QlikGateway-Worker") { Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue }
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -like "*qlik_gateway*" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 2
+
+Write-Host "==> install code from $Src"
+$pip = @("-m", "pip", "install", "--force-reinstall", "--no-deps", "--disable-pip-version-check")
+if ($IndexUrl) { $pip += @("--index-url", $IndexUrl) }
+if ($TrustedHost) { $pip += @("--trusted-host", $TrustedHost) }
+& $py @pip $Src
+if ($LASTEXITCODE) { throw "pip failed (check -IndexUrl / -TrustedHost)" }
+
+Write-Host "==> start"
+foreach ($n in "QlikGateway-API", "QlikGateway-Worker") { Start-ScheduledTask -TaskName $n }
+Start-Sleep -Seconds 8
+$v = ((Invoke-WebRequest "http://localhost:$Port/openapi.json" -UseBasicParsing).Content | Select-String '"version":"[^"]*"').Matches.Value
+Write-Host "running: $v" -ForegroundColor Green
