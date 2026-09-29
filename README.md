@@ -108,7 +108,7 @@ curl -s -H "Authorization: Bearer $TOKEN" "localhost:8080/api/v1/executions/1?wa
 
 ## Airflow
 
-Провайдер лежит в `airflow/plugins/qlik_gateway_provider`. Скопируйте его в `plugins/` Airflow и создайте Connection `qlik_gateway_default`: тип HTTP, host `https://qlik-gateway…`, в password — токен клиента.
+Провайдер лежит в `airflow/plugins/qlik_gateway_provider`. Скопируйте его вместе с `airflow/plugins/.airflowignore` в `plugins/` Airflow (файл убирает ложные ошибки `Failed to import plugin`) и создайте Connection `qlik_gateway_default`: тип HTTP, host `https://qlik-gateway…`, в password — токен клиента.
 
 ```python
 from qlik_gateway_provider import QlikReloadOperator, QlikExecutionSensor
@@ -124,6 +124,7 @@ QlikReloadOperator(
 * При неуспехе хвост лога скрипта Qlik попадает в лог задачи Airflow.
 * При kill задачи reload отменяется, но только если его запустил именно этот таск, а не присоединился к чужому.
 * Вариант fire-and-forget плюс `QlikExecutionSensor(mode="reschedule")` показан в `airflow/dags/example_qlik_reload.py`.
+* Проверка интеграции: DAG `airflow/dags/qlik_gateway_smoke.py` (запуск вручную, параметр `qlik_task_id`). Проверен на Airflow 2.10: проверка токена, reload с ожиданием, запуск + сенсор, `deferrable=True`, неуспешный reload с выводом лога скрипта.
 
 ## Конфигурация
 
