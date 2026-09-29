@@ -95,6 +95,9 @@ if ($TrustedHost) { $pip += @("--trusted-host", $TrustedHost) }
 if ($LASTEXITCODE) { throw "pip upgrade failed (check -IndexUrl / -TrustedHost)" }
 & $Py @pip ((Join-Path $InstallDir "app") + "[postgres]")
 if ($LASTEXITCODE) { throw "package install failed" }
+# pip skips a local package whose version did not change: always put the new gateway code in place
+& $Py @pip --force-reinstall --no-deps (Join-Path $InstallDir "app")
+if ($LASTEXITCODE) { throw "gateway code reinstall failed" }
 
 Step "Launch scripts"
 $runApi = @"
