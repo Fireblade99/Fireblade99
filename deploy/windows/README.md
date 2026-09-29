@@ -74,5 +74,5 @@ powershell -ExecutionPolicy Bypass -File deploy\windows\install.ps1 `
    QGW_QLIK_BASE_URL=https://<qlik>/airflowgw
    QGW_QLIK_JWT_USER_DIRECTORY=<ваш домен>
    ```
-   Если сертификат Qlik выпущен корпоративным CA, укажите `QGW_QLIK_VERIFY_SSL=C:/qgw/secrets/corp-ca.pem`.
+   Проверка сертификата Qlik по умолчанию идёт через хранилище сертификатов Windows (`QGW_QLIK_VERIFY_SSL=system`), поэтому корпоративный CA работает без дополнительных настроек. Другие значения: `false` (без проверки, только для первого теста) или путь к PEM-файлу CA.
 3. Выполните `restart.cmd`, затем в UI откройте «Задачи Qlik» и нажмите «Синхронизировать».

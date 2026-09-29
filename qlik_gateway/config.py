@@ -28,7 +28,12 @@ class Settings(BaseSettings):
     qlik_mode: Literal["jwt", "mock"] = "mock"
     # Base URL of the virtual proxy, e.g. https://qlik.company.local/airflowgw
     qlik_base_url: str = "https://qlik.local/airflowgw"
-    qlik_verify_ssl: bool | str = True  # bool or path to CA bundle
+    # TLS verification of the Qlik certificate:
+    #   system - trust the OS certificate store (Windows store: corporate CAs work out of the box)
+    #   true   - Python's bundled public CAs (certifi)
+    #   false  - no verification (only for a first test)
+    #   <path> - PEM file with the CA certificate(s)
+    qlik_verify_ssl: str = "system"
     qlik_timeout_seconds: float = 30.0
     # JWT the gateway signs for its own service account (Airflow never sees it).
     qlik_jwt_private_key_path: str = "./secrets/qlik_jwt_private.pem"

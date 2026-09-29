@@ -5,7 +5,9 @@ so revoking their access is a matter of disabling their gateway token.
 """
 
 import logging
+import os
 import secrets
+import ssl
 import string
 import threading
 import time
@@ -21,6 +23,25 @@ log = logging.getLogger(__name__)
 
 _QLIK_NULL_DATE = "1753-01-01"
 _BULK_CHUNK = 40  # executions per OR-filter, keeps the URL short
+
+
+def ssl_verify(value: str) -> bool | ssl.SSLContext:
+    """Turns QGW_QLIK_VERIFY_SSL into what httpx expects (see Settings.qlik_verify_ssl)."""
+    v = str(value).strip()
+    low = v.lower()
+    if low in ("false", "0", "no", "off"):
+        return False
+    if low in ("true", "1", "yes", "on", ""):
+        return True
+    if low == "system":
+        try:
+            import truststore
+        except ImportError:  # pragma: no cover
+            return True
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    if not os.path.isfile(v):
+        raise FileNotFoundError(f"QGW_QLIK_VERIFY_SSL: CA file not found: {v}")
+    return ssl.create_default_context(cafile=v)
 
 
 def _xrfkey() -> str:
@@ -95,7 +116,7 @@ class QrsJwtClient:
         # The cookie jar keeps the proxy session, so Qlik does not create a new session per call.
         self._http = httpx.Client(
             base_url=settings.qlik_base_url.rstrip("/"),
-            verify=settings.qlik_verify_ssl,
+            verify=ssl_verify(settings.qlik_verify_ssl),
             timeout=settings.qlik_timeout_seconds,
             headers={"User-Agent": "qlik-gateway/0.1"},
             transport=transport,

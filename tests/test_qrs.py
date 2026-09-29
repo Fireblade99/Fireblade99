@@ -151,3 +151,14 @@ def test_generated_keys_work_for_jwt(tmp_path):
     cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
     token = jwt.encode({"userId": "u"}, key_path.read_bytes(), algorithm="RS256")
     assert jwt.decode(token, cert.public_key(), algorithms=["RS256"])["userId"] == "u"
+
+
+def test_ssl_verify_setting(tmp_path):
+    import ssl
+
+    from qlik_gateway.qlik.qrs import ssl_verify
+
+    assert ssl_verify("false") is False and ssl_verify("true") is True
+    assert isinstance(ssl_verify("system"), ssl.SSLContext)
+    with pytest.raises(FileNotFoundError, match="CA file not found"):
+        ssl_verify(str(tmp_path / "missing.pem"))
