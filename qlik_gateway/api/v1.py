@@ -63,12 +63,16 @@ def exec_state(ex: Execution) -> dict:
     }
 
 
-def exec_details(ex: Execution) -> dict:
+def exec_details(ex: Execution, viewer: Client) -> dict:
     d = exec_state(ex)
+    own = ex.client_id == viewer.id
     d.update(
         {
-            "client": ex.client.name,
-            "initiator": ex.initiator,
+            # another client may see the execution (it shares the task, e.g. after dedupe),
+            # but never who started it
+            "own": own,
+            "client": ex.client.name if own else None,
+            "initiator": ex.initiator if own else {},
             "priority": ex.priority,
             "qlik_execution_id": ex.qlik_execution_id,
             "qlik_status_code": ex.qlik_status_code,
@@ -212,7 +216,7 @@ def execution_details(
 ):
     request.state.audit["action"] = "details"
     svc.require_action(client, "details")
-    return exec_details(_load_execution(db, client, execution_id, request))
+    return exec_details(_load_execution(db, client, execution_id, request), client)
 
 
 @router.get("/executions/{execution_id}/log", summary="Qlik script log of a finished execution")

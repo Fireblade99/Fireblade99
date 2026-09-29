@@ -222,3 +222,18 @@ def test_json_declares_utf8(http, coordinator, make_client):
     r = http.get("/api/v1/whoami", headers=h)
     assert r.headers["content-type"] == "application/json; charset=utf-8"
     assert http.get("/api/v1/whoami").headers["content-type"] == "application/json; charset=utf-8"
+
+
+def test_other_clients_do_not_see_initiator(http, coordinator, make_client):
+    _, a = make_client("team-a")
+    _, b = make_client("team-b")
+    _, c = make_client("team-c", tasks=(HR,))
+    eid = http.post(f"/api/v1/tasks/{SALES}/start", headers={**a, "X-Airflow-Dag-Id": "secret_dag"}).json()[
+        "execution_id"
+    ]
+    mine = http.get(f"/api/v1/executions/{eid}/details", headers=a).json()
+    assert mine["own"] and mine["initiator"]["dag_id"] == "secret_dag" and mine["client"] == "team-a"
+    shared = http.get(f"/api/v1/executions/{eid}/details", headers=b).json()  # same task, other team
+    assert not shared["own"] and shared["initiator"] == {} and shared["client"] is None
+    assert http.get(f"/api/v1/executions/{eid}", headers=c).status_code == 404  # no access to the task
+    assert http.get("/api/v1/executions", headers=b).json() == []  # list shows own runs only
