@@ -11,6 +11,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import select, text
 from starlette.middleware.sessions import SessionMiddleware
 
+from . import __version__
 from .api import admin, v1
 from .api.deps import client_ip, initiator_meta
 from .config import Settings, get_settings
@@ -66,7 +67,7 @@ def create_app(settings: Settings | None = None, backend=None) -> FastAPI:
     app = FastAPI(
         default_response_class=UTF8JSONResponse,
         title="Qlik Gateway",
-        version="0.1.0",
+        version=__version__,
         description="Buffer service between external schedulers (Airflow, platform teams) and Qlik Sense.",
         lifespan=lifespan,
     )
