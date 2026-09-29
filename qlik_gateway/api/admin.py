@@ -344,7 +344,7 @@ def client_edit_page(client_id: int, request: Request, user: str = Depends(admin
         c=c,
         actions=ACTIONS,
         tasks=tasks,
-        qlik_granted={t.id for t in tasks if c.name in svc.granted_in_qlik(t)},
+        qlik_granted={t.id for t in tasks if svc.client_can_task(Client(name=c.name, allowed_tasks=[]), t.id, t)},
         client_prop=get_settings().qlik_client_custom_property,
         is_new=False,
         new_token=new_token and new_token["token"],

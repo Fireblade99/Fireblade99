@@ -25,7 +25,7 @@ def client_can_task(client: Client, task_id: str, task: QlikTask | None = None) 
     allowed = client.allowed_tasks or []
     if "*" in allowed or task_id in allowed:
         return True
-    return task is not None and client.name in granted_in_qlik(task)
+    return task is not None and client.name.lower() in {n.strip().lower() for n in granted_in_qlik(task) if n}
 
 
 def granted_in_qlik(task: QlikTask) -> list[str]:

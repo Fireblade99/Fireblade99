@@ -79,11 +79,12 @@ QGW_QLIK_JWT_USER_DIRECTORY=CORP
 
 | Правило | Resource filter | Actions | Conditions |
 |---|---|---|---|
-| `QGW - apps read` | `App_*` | Read | `user.name = "svc_qlik_gateway" and user.userDirectory = "CORP" and resource.@ExternalRun = "Yes"` |
-| `QGW - reload tasks` | `ReloadTask_*` | Read, Update | `user.name = "svc_qlik_gateway" and user.userDirectory = "CORP" and (resource.app.@ExternalRun = "Yes" or resource.@ExternalRun = "Yes")` |
-| `QGW - executions read` | `ExecutionResult_*, ExecutionSession_*` | Read | `user.name = "svc_qlik_gateway" and user.userDirectory = "CORP"` |
+| `QGW - apps read` | `App_*` | Read | `user.userId = "svc_qlik_gateway" and user.userDirectory = "CORP" and resource.@ExternalRun = "Yes"` |
+| `QGW - reload tasks` | `ReloadTask_*` | Read, Update | `user.userId = "svc_qlik_gateway" and user.userDirectory = "CORP" and (resource.app.@ExternalRun = "Yes" or resource.@ExternalRun = "Yes")` |
+| `QGW - executions read` | `ExecutionResult_*, ExecutionSession_*` | Read | `user.userId = "svc_qlik_gateway" and user.userDirectory = "CORP"` |
+| `QGW - custom properties read` | `CustomPropertyDefinition_*` | Read | `user.userId = "svc_qlik_gateway" and user.userDirectory = "CORP" and (resource.name = "ExternalRun" or resource.name = "GatewayClient")` |
 
-Update нужен для старта и остановки задачи. Если скачивание лога скрипта отдаёт 403, добавьте `FileReference_*` (Read) во второе правило.
+Update нужен для старта и остановки задачи. Четвёртое правило обязательно: без права на чтение определения custom property QRS не возвращает её значения, и шлюз не видит `ExternalRun`/`GatewayClient` у приложений. В условиях используйте `user.userId` (логин), а не `user.name` (отображаемое имя). Если скачивание лога скрипта отдаёт 403, добавьте `FileReference_*` (Read) во второе правило.
 
 Так шлюз физически не сможет запустить задачу без `ExternalRun=Yes`, даже при ошибке в конфигурации шлюза. Проверка: **Preview** внизу правила, пользователь `svc_qlik_gateway`.
 

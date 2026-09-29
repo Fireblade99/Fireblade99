@@ -44,6 +44,11 @@ def ssl_verify(value: str) -> bool | ssl.SSLContext:
     return ssl.create_default_context(cafile=v)
 
 
+def _has_value(props: dict[str, list[str]], name: str, value: str) -> bool:
+    """Case-insensitive, like Qlik security rules."""
+    return any((v or "").strip().lower() == value.strip().lower() for v in props.get(name, []))
+
+
 def _xrfkey() -> str:
     alphabet = string.ascii_letters + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(16))
@@ -210,7 +215,7 @@ class QrsJwtClient:
                 cp_name = (cp.get("definition") or {}).get("name")
                 if cp_name:
                     cps.setdefault(cp_name, []).append(cp.get("value"))
-            if value in cps.get(name, []):
+            if _has_value(cps, name, value):
                 marked_apps[a["id"]] = cps
         result = []
         for t in tasks:
@@ -219,7 +224,7 @@ class QrsJwtClient:
                     merged = t.custom_properties.setdefault(cp_name, [])
                     merged.extend(v for v in values if v not in merged)
                 result.append(t)
-            elif value in t.custom_properties.get(name, []):
+            elif _has_value(t.custom_properties, name, value):
                 result.append(t)
         return result
 
