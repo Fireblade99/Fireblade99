@@ -1,0 +1,203 @@
+# Проверка того, что в правилах prod-dp легко сломать молча:
+# разделение порогов по хостам, отсутствие двойных уведомлений,
+# сохранение метки pg_group, изоляция групп и поведение делителя
+# на нуле.
+#
+# Запуск:  promtool test rules prometheus/tests/alerts_prod_dp_test.yml
+rule_files:
+  - ../../grafana/alerts-prod-dp.yml
+
+evaluation_interval: 1m
+
+tests:
+
+  # ------------------------------------------------------------------
+  # Порог 1 минута действует только на dwh-dbp2-lp2. Тот же запрос той
+  # же длительности на dwh-dbp12-lp2 не должен давать ничего.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'pg_stat_activity_max_tx_duration{pg_group="prod-dp",pg_instance="dwh-dbp2-lp2",datname="dwh",state="active"}'
+        values: '120+0x10'
+      - series: 'pg_stat_activity_max_tx_duration{pg_group="prod-dp",pg_instance="dwh-dbp12-lp2",datname="dwh",state="active"}'
+        values: '120+0x10'
+    promql_expr_test:
+      - expr: 'ALERTS{alertstate="firing"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ДолгаяТранзакцияDbp2",alertstate="firing",datname="dwh",pg_group="prod-dp",pg_instance="dwh-dbp2-lp2",severity="warning"}'
+            value: 1
+
+  # ------------------------------------------------------------------
+  # Час с лишним: срабатывает и там, и там, но каждый хост ровно один
+  # раз. Если убрать pg_instance!~ из общего правила, dwh-dbp2-lp2
+  # попадёт под оба и пришлёт два уведомления об одном запросе.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'pg_stat_activity_max_tx_duration{pg_group="prod-dp",pg_instance="dwh-dbp2-lp2",datname="dwh",state="active"}'
+        values: '4000+0x10'
+      - series: 'pg_stat_activity_max_tx_duration{pg_group="prod-dp",pg_instance="dwh-dbp12-lp2",datname="dwh",state="active"}'
+        values: '4000+0x10'
+    promql_expr_test:
+      - expr: 'ALERTS{alertstate="firing"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ДолгаяТранзакция",alertstate="firing",datname="dwh",pg_group="prod-dp",pg_instance="dwh-dbp12-lp2",severity="warning"}'
+            value: 1
+          - labels: 'ALERTS{alertname="ДолгаяТранзакцияDbp2",alertstate="firing",datname="dwh",pg_group="prod-dp",pg_instance="dwh-dbp2-lp2",severity="warning"}'
+            value: 1
+
+  # ------------------------------------------------------------------
+  # idle in transaction ловит своё правило и только своё. Общее правило
+  # по долгим транзакциям должно молчать, иначе одна зависшая сессия
+  # даёт два уведомления с разным диагнозом.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'pg_stat_activity_max_tx_duration{pg_group="prod-dp",pg_instance="dwh-dbp10-lp2",datname="dwh",state="idle in transaction"}'
+        values: '4000+0x10'
+    promql_expr_test:
+      - expr: 'ALERTS{alertstate="firing"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ЗависшаяIdleInTransaction",alertstate="firing",datname="dwh",pg_group="prod-dp",pg_instance="dwh-dbp10-lp2",severity="warning"}'
+            value: 1
+
+  # ------------------------------------------------------------------
+  # Изоляция групп. Хост чужой группы лежит намертво — правила prod-dp
+  # обязаны промолчать все до единого.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'pg_up{pg_group="qse",pg_instance="qse-dbp1-lp1",job="postgres-exporter"}'
+        values: '0+0x10'
+      - series: 'up{pg_group="qse",pg_instance="qse-dbp1-lp1",instance="qse-dbp1-lp1:9187",job="postgres-exporter"}'
+        values: '0+0x10'
+      - series: 'pg_stat_activity_max_tx_duration{pg_group="qse",pg_instance="qse-dbp1-lp1",datname="qse",state="active"}'
+        values: '99999+0x10'
+      - series: 'pg_replication_lag_seconds{pg_group="qse",pg_instance="qse-dbp1-lp1"}'
+        values: '3600+0x10'
+    promql_expr_test:
+      - expr: 'ALERTS'
+        eval_time: 5m
+        exp_samples: []
+
+  # ------------------------------------------------------------------
+  # pg_group обязан пережить агрегацию: по нему Grafana разводит
+  # уведомления. sum by (pg_instance) без pg_group съедает метку, и
+  # маршрутизировать становится нечем — проверяем на правиле, где
+  # агрегация самая агрессивная.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'pg_stat_activity_count{pg_group="prod-dp",pg_instance="dwh-dbp3-lp1",datname="dwh",state="active",usename="etl"}'
+        values: '90+0x15'
+      - series: 'pg_stat_activity_count{pg_group="prod-dp",pg_instance="dwh-dbp3-lp1",datname="dwh",state="idle",usename="app"}'
+        values: '8+0x15'
+      - series: 'pg_settings_max_connections{pg_group="prod-dp",pg_instance="dwh-dbp3-lp1"}'
+        values: '100+0x15'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="СлотыПодключенийНаИсходе",alertstate="firing"}'
+        eval_time: 10m
+        exp_samples:
+          - labels: 'ALERTS{alertname="СлотыПодключенийНаИсходе",alertstate="firing",pg_group="prod-dp",pg_instance="dwh-dbp3-lp1",severity="warning"}'
+            value: 1
+      # 98% — критическое правило тоже должно подняться
+      - expr: 'ALERTS{alertname="СлотыПодключенийИсчерпаны",alertstate="firing"}'
+        eval_time: 10m
+        exp_samples:
+          - labels: 'ALERTS{alertname="СлотыПодключенийИсчерпаны",alertstate="firing",pg_group="prod-dp",pg_instance="dwh-dbp3-lp1",severity="critical"}'
+            value: 1
+
+  # ------------------------------------------------------------------
+  # Простаивающий диск: ноль операций делится на ноль операций. В PromQL
+  # это NaN, NaN сравнение не проходит, алерта быть не должно. Тест
+  # держит именно это свойство: любая будущая правка запроса, после
+  # которой простой начнёт давать число вместо NaN, здесь упадёт.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'node_disk_read_time_seconds_total{pg_group="prod-dp",pg_instance="dwh-dbp3-lp1",device="sda"}'
+        values: '100+0x20'
+      - series: 'node_disk_reads_completed_total{pg_group="prod-dp",pg_instance="dwh-dbp3-lp1",device="sda"}'
+        values: '5000+0x20'
+      - series: 'node_disk_write_time_seconds_total{pg_group="prod-dp",pg_instance="dwh-dbp3-lp1",device="sda"}'
+        values: '200+0x20'
+      - series: 'node_disk_writes_completed_total{pg_group="prod-dp",pg_instance="dwh-dbp3-lp1",device="sda"}'
+        values: '9000+0x20'
+    promql_expr_test:
+      - expr: 'ALERTS'
+        eval_time: 15m
+        exp_samples: []
+
+  # ------------------------------------------------------------------
+  # Реальная деградация: 3 секунды суммарного времени на 60 операций
+  # в минуту — это 50 мс на операцию, выше порога в 20 мс.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'node_disk_read_time_seconds_total{pg_group="prod-dp",pg_instance="dwh-dbp3-lp1",device="sda"}'
+        values: '0+3x20'
+      - series: 'node_disk_reads_completed_total{pg_group="prod-dp",pg_instance="dwh-dbp3-lp1",device="sda"}'
+        values: '0+60x20'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="ЗадержкаДискаЧтение",alertstate="firing"}'
+        eval_time: 15m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ЗадержкаДискаЧтение",alertstate="firing",device="sda",pg_group="prod-dp",pg_instance="dwh-dbp3-lp1",severity="warning"}'
+            value: 1
+
+  # ------------------------------------------------------------------
+  # Главная защита от ложных срабатываний по блокировкам: непрерывность.
+  # Ожидание, прервавшееся хоть на одно вычисление, обнуляет отсчёт for
+  # и уведомления не даёт. Держится две минуты подряд — даёт.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'pg_stat_activity_count{pg_group="prod-dp",pg_instance="dwh-dbp10-lp2",datname="dwh",state="active",wait_event_type="Lock",wait_event="transactionid"}'
+        values: '1 1 1 0 1 1 1 1 1 1'
+    promql_expr_test:
+      # две минуты подряд — сработало
+      - expr: 'ALERTS{alertname="СессииЖдутБлокировку",alertstate="firing"}'
+        eval_time: 2m
+        exp_samples:
+          - labels: 'ALERTS{alertname="СессииЖдутБлокировку",alertstate="firing",datname="dwh",pg_group="prod-dp",pg_instance="dwh-dbp10-lp2",severity="warning"}'
+            value: 1
+      # ожидание кончилось — тревоги нет вообще
+      - expr: 'ALERTS{alertname="СессииЖдутБлокировку"}'
+        eval_time: 3m
+        exp_samples: []
+      # началось заново, минута из двух — только pending, уведомления нет
+      - expr: 'ALERTS{alertname="СессииЖдутБлокировку",alertstate="firing"}'
+        eval_time: 5m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="СессииЖдутБлокировку",alertstate="pending"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="СессииЖдутБлокировку",alertstate="pending",datname="dwh",pg_group="prod-dp",pg_instance="dwh-dbp10-lp2",severity="warning"}'
+            value: 1
+      # две минуты набрались — сработало
+      - expr: 'ALERTS{alertname="СессииЖдутБлокировку",alertstate="firing"}'
+        eval_time: 6m
+        exp_samples:
+          - labels: 'ALERTS{alertname="СессииЖдутБлокировку",alertstate="firing",datname="dwh",pg_group="prod-dp",pg_instance="dwh-dbp10-lp2",severity="warning"}'
+            value: 1
+
+  # ------------------------------------------------------------------
+  # Реплика: на мастере метрика равна нулю по построению, поэтому
+  # отдельной проверки "это standby" в правиле нет. Мастер молчит,
+  # отстающая реплика кричит.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'pg_replication_lag_seconds{pg_group="prod-dp",pg_instance="dwh-dbp3-lp1"}'
+        values: '0+0x10'
+      - series: 'pg_replication_lag_seconds{pg_group="prod-dp",pg_instance="dwh-dbp10-lp2"}'
+        values: '300+0x10'
+    promql_expr_test:
+      - expr: 'ALERTS{alertstate="firing"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ОтставаниеРеплики",alertstate="firing",pg_group="prod-dp",pg_instance="dwh-dbp10-lp2",severity="critical"}'
+            value: 1
