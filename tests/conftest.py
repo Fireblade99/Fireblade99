@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -18,8 +20,19 @@ DISABLED = "55555555-5555-5555-5555-555555555555"
 
 @pytest.fixture
 def settings(tmp_path):
+    # QGW_TEST_DATABASE_URL=postgresql+psycopg://... runs the suite against PostgreSQL
+    url = os.environ.get("QGW_TEST_DATABASE_URL")
+    if url:
+        from sqlalchemy import create_engine
+
+        from qlik_gateway import models  # noqa: F401
+        from qlik_gateway.db import Base
+
+        eng = create_engine(url)
+        Base.metadata.drop_all(eng)
+        eng.dispose()
     return Settings(
-        database_url=f"sqlite:///{tmp_path}/test.db",
+        database_url=url or f"sqlite:///{tmp_path}/test.db",
         qlik_mode="mock",
         secret_key="test",
         bootstrap_admin_user="admin",
