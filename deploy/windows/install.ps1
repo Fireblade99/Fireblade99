@@ -87,6 +87,14 @@ $ver = & $Py -c "import sys; print('%d.%d' % sys.version_info[:2])"
 Write-Host "Using $Py ($ver)"
 if ([version]$ver -lt [version]"3.10") { throw "Python 3.10+ required, found $ver" }
 
+Step "Stopping a running gateway (if any)"
+# Otherwise the old processes keep port 8080 and serve the old code after the update.
+foreach ($n in "QlikGateway-API", "QlikGateway-Worker") { Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue }
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+    Where-Object { $_.CommandLine -like "*qlik_gateway.cli*" } |
+    ForEach-Object { Write-Host "stopping PID $($_.ProcessId)"; Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 2
+
 Step "Packages"
 $pip = @("-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location")
 if ($IndexUrl) { $pip += @("--index-url", $IndexUrl) }
