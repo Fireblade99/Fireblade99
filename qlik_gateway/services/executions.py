@@ -14,6 +14,7 @@ from .audit import audit
 from .errors import ServiceError
 from .kv import dispatch_paused
 from .metrics import EXECUTIONS_ACTIVE, EXECUTIONS_FINISHED
+from .scriptlog import extract_script_error
 
 log = logging.getLogger(__name__)
 
@@ -263,6 +264,10 @@ def poll(db: Session, backend: QlikBackend, settings: Settings) -> int:
             if new_status != ExecStatus.SUCCESS:
                 msgs = [d.get("message") for d in info.details if d.get("message")]
                 error = msgs[-1] if msgs else info.status_text
+                detail = _script_error(backend, ex)
+                if detail:
+                    ex.error_detail = detail
+                    error = detail.splitlines()[0]
             _finish(ex, new_status, error=error)
         else:
             ex.status = new_status
@@ -271,6 +276,17 @@ def poll(db: Session, backend: QlikBackend, settings: Settings) -> int:
                 _finish(ex, ExecStatus.TIMEOUT, error="Gateway execution timeout exceeded (reload not stopped)")
         updated += 1
     return updated
+
+
+def _script_error(backend: QlikBackend, ex: Execution) -> str | None:
+    """The real reason of a failed reload from its script log (one extra Qlik call per failure)."""
+    if not ex.script_log_ref:
+        return None
+    try:
+        return extract_script_error(backend.get_script_log(ex.task_id, ex.script_log_ref))
+    except QlikError as e:
+        log.info("script log of execution %s is not available: %s", ex.id, e)
+        return None
 
 
 def _finish(ex: Execution, status: str, *, error: str | None = None) -> None:

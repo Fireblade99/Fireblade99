@@ -19,7 +19,7 @@
 <tr><th>Execution ID</th><td class="mono">{{ ex.qlik_execution_id or "—" }}</td></tr>
 <tr><th>Последний опрос</th><td>{{ ex.last_polled_at|dt }}</td></tr>
 </table></div></div>
-{% if ex.error %}<div class="flash bad">{{ ex.error }}</div>{% endif %}
+{% if ex.error %}<div class="flash bad"><b>Ошибка:</b> {{ ex.error }}{% if ex.error_detail and ex.error_detail != ex.error %}<pre style="margin:8px 0 0;background:transparent;border:0;padding:0">{{ ex.error_detail }}</pre>{% endif %}</div>{% endif %}
 <p>{% if active and is_admin %}<form class="inline" method="post" action="/ui/executions/{{ ex.id }}/cancel" onsubmit="return confirm('Отменить / остановить?')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger">{% if ex.status == "QUEUED" %}Убрать из очереди{% else %}Остановить reload в Qlik{% endif %}</button></form>{% endif %}
 {% if ex.script_log_ref %}<a class="btn" href="/ui/executions/{{ ex.id }}/log">Лог скрипта</a>{% endif %}</p>
 <h2>Сообщения Qlik</h2>

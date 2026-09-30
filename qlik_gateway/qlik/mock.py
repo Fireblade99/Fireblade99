@@ -119,7 +119,16 @@ class MockQlik:
             f"{e['start']:%Y%m%dT%H%M%S} Execution started.",
             f"{e['start']:%Y%m%dT%H%M%S} LIB CONNECT TO 'dwh';",
             f"{e['start']:%Y%m%dT%H%M%S} Facts << sales 1 234 567 Lines fetched",
-            "Script error: Field not found <X>" if e["fail"] else "Execution finished.",
+            *(
+                [
+                    f"{e['start']:%Y%m%dT%H%M%S} Произошла следующая ошибка:",
+                    f"{e['start']:%Y%m%dT%H%M%S} Connector connect error: SQL##f - SqlState: S1000, ErrorCode: 1045,"
+                    " ErrorMsg: [MySQL][ODBC 9.2(w) Driver]Access denied for user 'etl'@'10.0.0.5'",
+                    f"{e['start']:%Y%m%dT%H%M%S} Execution Failed",
+                ]
+                if e["fail"]
+                else ["Execution finished."]
+            ),
         ]
         return "\n".join(lines)
 

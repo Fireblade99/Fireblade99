@@ -59,6 +59,7 @@ def exec_state(ex: Execution) -> dict:
         "finished_at": _iso(ex.finished_at),
         "duration_seconds": ex.duration_seconds,
         "error": ex.error,
+        "error_detail": ex.error_detail,
         "last_polled_at": _iso(ex.last_polled_at),
     }
 

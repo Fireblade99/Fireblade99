@@ -43,7 +43,8 @@ def test_failed_reload_reports_error(http, coordinator, make_client, mock):
     _finish_all(mock)
     coordinator.tick(force=True)
     st = http.get(f"/api/v1/executions/{eid}", headers=h).json()
-    assert st["status"] == "FAILED" and "Script error" in st["error"]
+    assert st["status"] == "FAILED" and "Connector connect error" in st["error"]
+    assert "Access denied for user" in st["error_detail"]  # the real reason from the script log
 
 
 def test_state_polling_does_not_hit_qlik(http, coordinator, make_client, mock):

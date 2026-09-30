@@ -33,7 +33,6 @@ class QlikExecutionSensor(BaseSensorOperator):
         if state["status"] not in TERMINAL:
             return False
         if state["status"] != "SUCCESS":
-            raise AirflowException(
-                f"Qlik execution {self.execution_id} ended with {state['status']}: {state.get('error')}"
-            )
+            reason = state.get("error_detail") or state.get("error")
+            raise AirflowException(f"Qlik execution {self.execution_id} ended with {state['status']}: {reason}")
         return True

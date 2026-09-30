@@ -128,7 +128,7 @@ class QlikReloadOperator(BaseOperator):
                 self.log.error("Qlik script log (tail):\n%s", hook.get_log(eid)[-20_000:])
             except AirflowException as e:
                 self.log.warning("Script log unavailable: %s", e)
-        reason = state.get("error") or state.get("message")
+        reason = state.get("error_detail") or state.get("error") or state.get("message")
         raise AirflowException(f"Qlik reload {self.qlik_task_id} ended with {state.get('status')}: {reason}")
 
     def on_kill(self):

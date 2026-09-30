@@ -111,6 +111,8 @@ class Execution(Base):
     node: Mapped[str | None] = mapped_column(String(200), nullable=True)
     details: Mapped[list] = mapped_column(JSON, default=list)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # the actual script error taken from the reload's script log (for failed reloads)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     script_log_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
