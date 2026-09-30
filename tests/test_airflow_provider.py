@@ -193,12 +193,24 @@ def test_if_running_policies(provider, live_gateway, mock):
     first.execute({"ti": ti1})
     # the reload is queued/running now: the three policies
     ti2 = _TI()
-    provider.QlikReloadOperator(task_id="b", qlik_task_id=SALES, wait_for_completion=False).execute({"ti": ti2})
+    provider.QlikReloadOperator(
+        task_id="b", qlik_task_id=SALES, if_running="attach", wait_for_completion=False
+    ).execute({"ti": ti2})
     assert ti2.xcom["execution_id"] == ti1.xcom["execution_id"] and ti2.xcom["deduplicated"] is True
     assert ti2.xcom["running_execution"]["own"] is True and ti2.xcom["running_execution"]["initiator"]["dag_id"]
 
     with pytest.raises(_AirflowSkipException):
         provider.QlikReloadOperator(task_id="c", qlik_task_id=SALES, if_running="skip").execute({"ti": _TI()})
+    # "fail" instead of "skip": Airflow retries later (retries / retry_delay)
+    ti3 = _TI()
+    with pytest.raises(_AirflowException) as err:
+        provider.QlikReloadOperator(
+            task_id="c2", qlik_task_id=SALES, if_running="skip", on_already_running="fail"
+        ).execute({"ti": ti3})
+    assert not isinstance(err.value, _AirflowSkipException)
+    assert ti3.xcom["running_execution"]["execution_id"] == ti1.xcom["execution_id"]
+    with pytest.raises(ValueError):
+        provider.QlikReloadOperator(task_id="x", qlik_task_id=SALES, if_running="nope")
 
     ti4 = _TI()
     provider.QlikReloadOperator(task_id="d", qlik_task_id=SALES, if_running="queue", wait_for_completion=False).execute(

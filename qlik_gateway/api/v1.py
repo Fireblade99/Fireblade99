@@ -26,12 +26,14 @@ router = APIRouter(prefix="/api/v1", tags=["client API"])
 
 
 class StartRequest(BaseModel):
-    if_running: Literal["attach", "queue", "skip"] | None = Field(
+    if_running: Literal["fresh", "attach", "queue", "skip"] | None = Field(
         None,
-        description="If the same task is already queued/running (for any client): attach to it (default), "
-        "queue a new run after it, or skip (409 already_running)",
+        description="If the same task is already queued/running (for any client): "
+        "fresh (default) - attach only to a run not yet sent to Qlik, otherwise queue a new run after the "
+        "current one; attach - attach to whatever runs (warning if it started before this request); "
+        "queue - always a new run; skip - 409 already_running. An administrator may force it per task/client.",
     )
-    dedupe: bool = Field(True, description="Legacy: true = if_running=attach, false = if_running=queue")
+    dedupe: bool | None = Field(None, description="Legacy: true = if_running=attach, false = if_running=queue")
     priority: int | None = Field(None, description="Lower is sooner; cannot be better than the client's priority")
     meta: dict = Field(default_factory=dict, description="Free-form initiator metadata stored with the execution")
 
@@ -159,7 +161,7 @@ def start_task(
     request.state.audit.update(action="start", task_id=task_id)
     initiator = initiator_meta(request)
     initiator.update({k: str(v)[:300] for k, v in (body.meta or {}).items()})
-    ex, dedup = svc.submit(
+    res = svc.submit(
         db,
         client,
         task_id,
@@ -170,14 +172,22 @@ def start_task(
         if_running=body.if_running,
         running_info=lambda e: running_info(e, client),
     )
-    running = svc.active_execution_for_task(db, task_id) if not dedup else ex
+    ex = res.execution
     db.commit()  # the caller must be able to read the execution as soon as it gets the id
-    request.state.audit.update(execution_id=ex.id, message="deduplicated" if dedup else "queued")
+    request.state.audit.update(
+        execution_id=ex.id,
+        message=("deduplicated" if res.deduplicated else "queued")
+        + f" (if_running={res.if_running} from {res.source})"
+        + "".join(f"; {w['code']}" for w in res.warnings),
+    )
     out = exec_state(ex)
-    out["deduplicated"] = dedup
+    out["deduplicated"] = res.deduplicated
+    out["if_running"] = res.if_running
+    out["if_running_requested"] = res.requested
+    out["policy_source"] = res.source
+    out["warnings"] = res.warnings
     # the run this request attached to / is queued behind (None if the task was idle)
-    attached_or_behind = dedup or (running is not None and running.id != ex.id)
-    out["running_execution"] = running_info(running, client) if attached_or_behind else None
+    out["running_execution"] = running_info(res.running, client) if res.running is not None else None
     return out
 
 
@@ -193,6 +203,8 @@ def running_info(ex: Execution, viewer: Client) -> dict:
         "created_at": _iso(ex.created_at),
         "started_at": _iso(ex.qlik_started_at),
         "dedup_hits": ex.dedup_hits,
+        # the run reads the data as of its start: anything prepared after started_at is not in it
+        "in_qlik": ex.status in ExecStatus.IN_QLIK,
     }
 
 

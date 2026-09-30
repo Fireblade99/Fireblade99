@@ -77,6 +77,9 @@ class Settings(BaseSettings):
 
     # --- client API ---------------------------------------------------------
     long_poll_max_seconds: int = 60
+    # What a start request does when the task is already queued/running and neither the request
+    # nor an administrator's setting on the task/client says otherwise (see models.IF_RUNNING).
+    default_if_running: Literal["fresh", "attach", "queue", "skip"] = "fresh"
     default_requests_per_minute: int = 60
     default_starts_per_hour: int = 30
     default_max_concurrent: int = 2

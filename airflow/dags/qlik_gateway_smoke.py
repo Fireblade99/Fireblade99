@@ -39,6 +39,9 @@ with DAG(
         task_id="reload_and_wait",
         qlik_task_id="{{ params.qlik_task_id }}",
         poll_interval=15,
+        # fresh (default): never join a reload that started before this DAG's data was ready;
+        # attach / queue / skip are the other options, see README "if_running"
+        if_running="fresh",
     )
 
     start_reload = QlikReloadOperator(

@@ -172,3 +172,26 @@ def test_formats_and_executions_page(http, coordinator, make_client):
     edit = http.get(f"/ui/tasks/{SALES}/edit").text
     assert "Минимальный интервал" in edit
     assert http.get("/static/vendor/flatpickr.min.js").status_code == 200
+
+
+def test_if_running_policy_set_in_ui(http, coordinator, make_client):
+    from qlik_gateway.db import session_scope
+    from qlik_gateway.models import Client, QlikTask
+
+    csrf = _login(http)
+    assert 'name="if_running_policy"' in http.get(f"/ui/tasks/{SALES}/edit").text
+    r = http.post(
+        f"/ui/tasks/{SALES}",
+        data={"csrf": csrf, "min_interval_seconds": "0", "if_running_policy": "queue"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    cid, _ = make_client("team-x")
+    page = http.get(f"/ui/clients/{cid}").text
+    assert 'name="if_running_policy"' in page
+    with session_scope() as db:
+        assert db.get(QlikTask, SALES).if_running_policy == "queue"
+    http.post(f"/ui/tasks/{SALES}", data={"csrf": csrf, "if_running_policy": "bogus"})
+    with session_scope() as db:
+        assert db.get(QlikTask, SALES).if_running_policy is None
+        assert db.get(Client, cid).if_running_policy is None

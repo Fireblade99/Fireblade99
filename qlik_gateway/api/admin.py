@@ -14,7 +14,18 @@ from sqlalchemy.orm import Session
 from .. import __version__
 from ..config import get_settings
 from ..db import get_db
-from ..models import ACTIONS, AdminUser, AuditLog, Client, ExecStatus, Execution, NodeHealth, QlikTask, utcnow
+from ..models import (
+    ACTIONS,
+    IF_RUNNING,
+    AdminUser,
+    AuditLog,
+    Client,
+    ExecStatus,
+    Execution,
+    NodeHealth,
+    QlikTask,
+    utcnow,
+)
 from ..qlik import QlikError
 from ..security import generate_client_token, verify_password
 from ..services import executions as svc
@@ -430,6 +441,11 @@ def _all_tasks(db: Session):
     return db.scalars(select(QlikTask).where(QlikTask.present_in_qlik.is_(True)).order_by(QlikTask.name)).all()
 
 
+def _policy(v) -> str | None:
+    v = str(v or "").strip()
+    return v if v in IF_RUNNING else None
+
+
 def _apply_client_form(c: Client, form) -> None:
     c.description = str(form.get("description", ""))
     c.owner_contact = str(form.get("owner_contact", ""))
@@ -443,6 +459,7 @@ def _apply_client_form(c: Client, form) -> None:
     c.starts_per_hour = int(form.get("starts_per_hour") or 0)
     c.max_concurrent = int(form.get("max_concurrent") or 0)
     c.priority = int(form.get("priority") or 100)
+    c.if_running_policy = _policy(form.get("if_running_policy"))
     exp = str(form.get("token_expires_at", "")).strip()
     c.token_expires_at = from_local(datetime.fromisoformat(exp)) if exp else None
 
@@ -510,6 +527,7 @@ def _client_snapshot(c: Client) -> dict:
         "sph": c.starts_per_hour,
         "conc": c.max_concurrent,
         "prio": c.priority,
+        "if_running": c.if_running_policy,
     }
 
 
@@ -626,6 +644,7 @@ def task_update(
     blocked: str = Form(""),
     blocked_reason: str = Form(""),
     min_interval_seconds: int = Form(0),
+    if_running_policy: str = Form(""),
     user: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -633,12 +652,18 @@ def task_update(
     t.blocked = bool(blocked)
     t.blocked_reason = blocked_reason if t.blocked else ""
     t.min_interval_seconds = max(0, min_interval_seconds)
+    t.if_running_policy = _policy(if_running_policy)
     admin_audit(
         db,
         request,
         "task.update",
         task_id=task_id,
-        meta={"blocked": t.blocked, "reason": t.blocked_reason, "min_interval": t.min_interval_seconds},
+        meta={
+            "blocked": t.blocked,
+            "reason": t.blocked_reason,
+            "min_interval": t.min_interval_seconds,
+            "if_running": t.if_running_policy,
+        },
     )
     flash(request, f"Задача «{t.name}» сохранена")
     return back("/ui/tasks")

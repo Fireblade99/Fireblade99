@@ -259,3 +259,45 @@ def test_if_running_skip_and_queue_via_api(http, coordinator, make_client):
     assert attached["deduplicated"] and attached["running_execution"]["own"] is True
     assert attached["running_execution"]["initiator"]["dag_id"] == "dag_a"
     assert http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"if_running": "nope"}).status_code == 422
+
+
+def test_fresh_never_attaches_to_a_run_already_in_qlik(http, coordinator, make_client, mock):
+    mock.min_duration = mock.max_duration = 60
+    _, a = make_client("team-a")
+    _, b = make_client("team-b")
+    first = http.post(f"/api/v1/tasks/{SALES}/start", headers=a).json()
+    # not sent to Qlik yet: it will read the data as of its start, attaching is safe
+    early = http.post(f"/api/v1/tasks/{SALES}/start", headers=b).json()
+    assert early["deduplicated"] and early["if_running"] == "fresh" and early["policy_source"] == "default"
+    assert early["warnings"] == []
+    coordinator.tick(force=True)  # first run is now in Qlik
+
+    late = http.post(f"/api/v1/tasks/{SALES}/start", headers=b).json()
+    assert not late["deduplicated"] and late["execution_id"] != first["execution_id"]
+    assert late["running_execution"]["execution_id"] == first["execution_id"]
+    assert late["running_execution"]["in_qlik"] is True
+    assert [w["code"] for w in late["warnings"]] == ["queued_behind_running"]
+    # a third request joins the queued (not yet started) run instead of adding one more
+    third = http.post(f"/api/v1/tasks/{SALES}/start", headers=a).json()
+    assert third["deduplicated"] and third["execution_id"] == late["execution_id"]
+
+    # explicit attach still joins the running one, but says it may miss fresh data
+    att = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"if_running": "attach"}).json()
+    assert att["execution_id"] == first["execution_id"]
+    assert [w["code"] for w in att["warnings"]] == ["attached_to_started_run"]
+
+
+def test_admin_forced_if_running_on_task_and_client(http, coordinator, make_client):
+    cid, a = make_client("team-a")
+    _, b = make_client("team-b")
+    http.post(f"/api/v1/tasks/{SALES}/start", headers=b)
+    with session_scope() as db:
+        db.get(Client, cid).if_running_policy = "skip"
+    r = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"if_running": "attach"})
+    assert r.status_code == 409 and r.json()["policy_source"] == "client" and r.json()["if_running"] == "skip"
+
+    with session_scope() as db:
+        db.get(QlikTask, SALES).if_running_policy = "queue"  # the task wins over the client
+    r = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"if_running": "attach"}).json()
+    assert not r["deduplicated"] and r["if_running"] == "queue" and r["policy_source"] == "task"
+    assert "policy_overridden" in [w["code"] for w in r["warnings"]]

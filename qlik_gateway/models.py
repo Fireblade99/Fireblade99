@@ -14,6 +14,14 @@ def utcnow() -> datetime:
 # behalf in Qlik (post task, get state, get details, get info) plus log/stop.
 ACTIONS = ("start", "state", "details", "info", "log", "stop")
 
+# What a start request does when the same task already has an active execution.
+#   fresh  - attach only to a run that has not reached Qlik yet (it will read the data as of now),
+#            otherwise queue a new run after the current one: the caller's data is always loaded
+#   attach - attach to whatever is queued/running, even if it started before the caller's data was ready
+#   queue  - always queue a new run
+#   skip   - start nothing, answer 409 already_running
+IF_RUNNING = ("fresh", "attach", "queue", "skip")
+
 
 class ExecStatus:
     QUEUED = "QUEUED"  # accepted by the gateway, waiting for a free slot
@@ -62,6 +70,8 @@ class Client(Base):
     starts_per_hour: Mapped[int] = mapped_column(Integer, default=30)
     max_concurrent: Mapped[int] = mapped_column(Integer, default=2)
     priority: Mapped[int] = mapped_column(Integer, default=100)  # lower = dispatched first
+    # set by an administrator: overrides the if_running the client asks for (None = the client decides)
+    if_running_policy: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -85,6 +95,8 @@ class QlikTask(Base):
     blocked: Mapped[bool] = mapped_column(Boolean, default=False)
     blocked_reason: Mapped[str] = mapped_column(Text, default="")
     min_interval_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    # set by an administrator: overrides both the client's setting and the request (None = not forced)
+    if_running_policy: Mapped[str | None] = mapped_column(String(10), nullable=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     present_in_qlik: Mapped[bool] = mapped_column(Boolean, default=True)
 

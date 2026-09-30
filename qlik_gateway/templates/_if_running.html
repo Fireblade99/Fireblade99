@@ -1,0 +1,9 @@
+<label>Если задача уже запущена (if_running)</label>
+<select name="if_running_policy" style="max-width:420px">
+<option value="" {% if not policy %}selected{% endif %}>{{ empty_label }}</option>
+<option value="fresh" {% if policy == "fresh" %}selected{% endif %}>fresh — только свежие данные (ждать / новый запуск после текущего)</option>
+<option value="attach" {% if policy == "attach" %}selected{% endif %}>attach — присоединяться к любому текущему запуску</option>
+<option value="queue" {% if policy == "queue" %}selected{% endif %}>queue — всегда новый запуск после текущего</option>
+<option value="skip" {% if policy == "skip" %}selected{% endif %}>skip — отказ 409, клиент решает сам</option>
+</select>
+<div class="muted small">{{ hint }}</div>

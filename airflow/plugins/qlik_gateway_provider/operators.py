@@ -12,6 +12,8 @@ except ImportError:  # parsed on its own by the DAG processor (not covered by .a
     from qlik_gateway_provider._compat import AirflowException, AirflowSkipException, BaseOperator
     from qlik_gateway_provider.hooks import QlikGatewayHook
 
+IF_RUNNING = ("fresh", "attach", "queue", "skip")
+
 
 class QlikReloadOperator(BaseOperator):
     """Runs a Qlik Sense reload task through Qlik Gateway and (optionally) waits for its result.
@@ -20,10 +22,18 @@ class QlikReloadOperator(BaseOperator):
     :param wait_for_completion: wait until the reload finishes and fail the task if it did not succeed
     :param deferrable: wait in the triggerer instead of holding a worker slot
     :param if_running: what to do if the same Qlik task is already queued/running (started by anyone):
-        "attach" (default) - wait for that run and take its result; no second reload
-        "queue"  - start a new reload after the current one finishes
-        "skip"   - start nothing and mark this Airflow task as skipped
-        Info about the running execution is logged and pushed to XCom "running_execution".
+        "fresh" (default) - join a run only if it has not been sent to Qlik yet (it will read the data
+                   as of its start); if the reload is already going, queue a new one after it, so the
+                   data this DAG prepared is guaranteed to be loaded
+        "attach" - wait for whatever run is going and take its result (a warning is logged if it
+                   started before this request: it may miss this DAG's data)
+        "queue"  - always start a new reload after the current one finishes
+        "skip"   - start nothing; see on_already_running
+        The gateway administrator may force a policy for the task or the client; the one applied,
+        warnings and the running execution (who/when) are logged and pushed to XCom
+        ("if_running", "warnings", "running_execution").
+    :param on_already_running: with "skip" (requested or forced): "skip" marks this Airflow task
+        skipped, "fail" fails it so Airflow retries later according to retries / retry_delay
     :param dedupe: legacy alias: True = if_running="attach", False = if_running="queue"
     :param poll_interval: long-poll period against the gateway (the gateway itself polls Qlik)
     :param max_wait: give up waiting after this long (the reload itself keeps running)
@@ -43,7 +53,8 @@ class QlikReloadOperator(BaseOperator):
         gateway_conn_id: str = QlikGatewayHook.default_conn_name,
         wait_for_completion: bool = True,
         deferrable: bool = False,
-        if_running: str = "attach",
+        if_running: str = "fresh",
+        on_already_running: str = "skip",
         dedupe: bool | None = None,
         poll_interval: int = 30,
         max_wait: timedelta = timedelta(hours=6),
@@ -59,9 +70,12 @@ class QlikReloadOperator(BaseOperator):
         self.deferrable = deferrable
         if dedupe is not None:
             if_running = "attach" if dedupe else "queue"
-        if if_running not in ("attach", "queue", "skip"):
-            raise ValueError("if_running must be 'attach', 'queue' or 'skip'")
+        if if_running not in IF_RUNNING:
+            raise ValueError("if_running must be one of: " + ", ".join(IF_RUNNING))
+        if on_already_running not in ("skip", "fail"):
+            raise ValueError("on_already_running must be 'skip' or 'fail'")
         self.if_running = if_running
+        self.on_already_running = on_already_running
         self.poll_interval = poll_interval
         self.max_wait = max_wait
         self.cancel_on_kill = cancel_on_kill
@@ -77,9 +91,18 @@ class QlikReloadOperator(BaseOperator):
             self._preflight(hook)
         started = hook.start_task(self.qlik_task_id, if_running=self.if_running)
         running = started.get("running_execution")
+        applied = started.get("if_running")
+        if applied and applied != self.if_running:
+            self.log.info("if_running=%s applied by the gateway (set on the %s)", applied, started.get("policy_source"))
+        for w in started.get("warnings") or []:
+            self.log.warning("Qlik Gateway: %s: %s", w.get("code"), w.get("message"))
+        context["ti"].xcom_push(key="if_running", value=applied)
+        context["ti"].xcom_push(key="warnings", value=started.get("warnings") or [])
         if started.get("error") == "already_running":
             self.log.info("Qlik task is already running: %s", _describe(running))
             context["ti"].xcom_push(key="running_execution", value=running)
+            if self.on_already_running == "fail":
+                raise AirflowException(f"{started.get('message')}; will be retried per retries/retry_delay")
             raise AirflowSkipException(f"Skipped: {started.get('message')}")
         self._execution_id = started["execution_id"]
         self._owned = not started.get("deduplicated")
@@ -90,7 +113,7 @@ class QlikReloadOperator(BaseOperator):
             self.log.info("Qlik task is already running, attached to it: %s", _describe(running))
         elif running:
             self.log.info(
-                "Qlik task is running now (%s); new execution %s queued after it",
+                "Qlik task is running now (%s); new execution %s queued after it, it will load the current data",
                 _describe(running),
                 self._execution_id,
             )
