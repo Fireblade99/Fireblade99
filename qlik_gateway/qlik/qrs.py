@@ -250,11 +250,18 @@ class QrsJwtClient:
         return _task_from_json(resp.json())
 
     def get_script_log(self, task_id: str, file_ref_id: str) -> str:
-        resp = self._request("GET", f"/qrs/reloadtask/{task_id}/scriptlog", params={"fileReferenceId": file_ref_id})
+        # two steps: ask QRS for a download reference, then download the file
+        try:
+            resp = self._request("GET", f"/qrs/reloadtask/{task_id}/scriptlog", params={"fileReferenceId": file_ref_id})
+        except QlikError as e:
+            raise QlikError(f"step 1/2 (GET /qrs/reloadtask/{{id}}/scriptlog): {e}", e.status_code) from e
         ref = (resp.json() or {}).get("value")
         if not ref:
             raise QlikError("Script log is not available")
-        resp = self._request("GET", f"/qrs/download/reloadtask/{ref}/scriptlog.txt")
+        try:
+            resp = self._request("GET", f"/qrs/download/reloadtask/{ref}/scriptlog.txt")
+        except QlikError as e:
+            raise QlikError(f"step 2/2 (GET /qrs/download/reloadtask/...): {e}", e.status_code) from e
         return resp.content.decode("utf-8", errors="replace")
 
     def engine_health(self, url: str) -> dict:

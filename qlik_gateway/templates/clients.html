@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% block content %}
-<h1>Клиенты <a class="btn" href="/ui/clients/new" style="float:right">+ Новый клиент</a></h1>
+<h1>Клиенты {% if is_admin %}<a class="btn" href="/ui/clients/new" style="float:right">+ Новый клиент</a>{% endif %}</h1>
 <p class="muted">Внешние системы, которым разрешено обращаться к шлюзу. Доступ к Qlik есть только у самого шлюза, поэтому блокировка клиента отзывает доступ мгновенно, независимо от сертификатов на их стороне.</p>
 <div class="table-wrap"><table>
 <tr><th>Клиент</th><th>Состояние</th><th>Действия</th><th>Задачи</th><th>Лимиты</th><th>Токен выдан</th><th>Последний вызов</th></tr>

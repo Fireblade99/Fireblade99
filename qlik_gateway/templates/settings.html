@@ -1,0 +1,43 @@
+{% extends "base.html" %}{% block content %}
+<h1>Настройки</h1>
+
+<div class="card">
+<h2 style="margin-top:0">Стоп-кран</h2>
+{% if paused %}
+  <p><span class="badge bad">ЗАПУСК В QLIK ПРИОСТАНОВЛЕН</span> <span class="small">кем: {{ paused.by }} · {{ paused.at|iso_dt }} · {{ paused.reason }}</span></p>
+  <p class="muted small">Заявки клиентов принимаются и копятся в очереди, в Qlik ничего не отправляется.</p>
+  <form method="post" action="/ui/dispatch"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="pause" value="0"><button class="primary">Возобновить запуск</button></form>
+{% else %}
+  <p><span class="badge ok">Запуск в Qlik активен</span></p>
+  <p class="muted small">Пауза останавливает отправку всех задач в Qlik. Заявки продолжают приниматься в очередь и уйдут после возобновления. Уже идущие reload не прерываются.</p>
+  <form method="post" action="/ui/dispatch" onsubmit="return confirm('Остановить отправку задач в Qlik?')" class="filters">
+   <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="pause" value="1">
+   <div><label>Причина</label><input type="text" name="reason" required placeholder="например: инцидент на кластере"></div>
+   <div><button class="danger">Стоп-кран: пауза всех запусков</button></div></form>
+{% endif %}
+</div>
+
+<div class="card">
+<h2 style="margin-top:0">Параметры координатора</h2>
+<p class="muted small">Применяются без перезапуска, в течение нескольких секунд. Значения из UI имеют приоритет над .env.</p>
+<form method="post" action="/ui/settings/runtime" class="filters">
+ <input type="hidden" name="csrf" value="{{ csrf }}">
+ <div><label>Одновременных reload</label>
+  <input type="number" name="max_concurrent_executions" value="{{ rt.max_concurrent_executions }}" min="{{ limits.max_concurrent_executions[0] }}" max="{{ limits.max_concurrent_executions[1] }}" required>
+  <div class="muted small">общий предел через шлюз · в .env: {{ env.max_concurrent_executions }}</div></div>
+ <div><label>Интервал опроса Qlik, с</label>
+  <input type="number" name="poll_interval_seconds" value="{{ rt.poll_interval_seconds|int }}" min="{{ limits.poll_interval_seconds[0] }}" max="{{ limits.poll_interval_seconds[1] }}" required>
+  <div class="muted small">один пакетный запрос на все активные · в .env: {{ env.poll_interval_seconds|int }}</div></div>
+ <div><button class="primary">Сохранить</button>
+  {% if rt.overridden %}<button name="reset" value="1" onclick="return confirm('Вернуть значения из .env?')">Сбросить к .env</button>{% endif %}</div>
+</form>
+</div>
+
+<div class="card">
+<h2 style="margin-top:0">Пользователи UI</h2>
+<div class="table-wrap"><table><tr><th>Логин</th><th>Роль</th><th>Активен</th><th>Создан</th></tr>
+{% for u in users %}<tr><td>{{ u.username }}</td><td>{% if u.role == "admin" %}<span class="badge info">admin</span>{% else %}<span class="badge muted">{{ u.role }}</span>{% endif %}</td><td>{{ "да" if u.enabled else "нет" }}</td><td class="small">{{ u.created_at|dt }}</td></tr>{% endfor %}
+</table></div>
+<p class="muted small">admin — всё; viewer — только просмотр (мониторинг, запуски, задачи, журнал), без настроек, клиентов и блокировок. Создать пользователя: <span class="mono">C:\qgw\manage.cmd create-admin &lt;логин&gt; --role viewer</span></p>
+</div>
+{% endblock %}

@@ -39,3 +39,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);padding:12px
 .pg{display:inline-block;min-width:30px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;text-align:center;background:var(--card);font-size:13px}
 .pg.cur{background:var(--accent);border-color:var(--accent);color:#fff}.pg.off{color:var(--muted);opacity:.5}
 a.pg:hover{text-decoration:none;border-color:var(--accent)}
+.statusline{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.daterange-box{display:inline-flex;align-items:center;gap:4px}.daterange-box input{width:230px;cursor:pointer}
+.daterange-box button{padding:4px 9px}
+.nowrap{white-space:nowrap}

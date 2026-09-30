@@ -6,7 +6,8 @@
 
 {% if not is_new %}
 <div class="card" style="display:flex;gap:12px;flex-wrap:wrap;align-items:end">
-{% if c.enabled %}
+{% if not is_admin %}<div class="muted">Режим просмотра: изменения доступны администратору.</div>
+{% elif c.enabled %}
 <form method="post" action="/ui/clients/{{ c.id }}/block" onsubmit="return confirm('Заблокировать клиента {{ c.name }}?')">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <label>Заблокировать доступ</label><input type="text" name="reason" placeholder="причина" required>
@@ -17,8 +18,8 @@
 <div>Причина блокировки: <b>{{ c.blocked_reason or "—" }}</b></div>
 <form method="post" action="/ui/clients/{{ c.id }}/unblock"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="primary">Разблокировать</button></form>
 {% endif %}
-<form method="post" action="/ui/clients/{{ c.id }}/rotate" onsubmit="return confirm('Старый токен сразу перестанет работать. Продолжить?')" style="margin-left:auto">
-<input type="hidden" name="csrf" value="{{ csrf }}"><button>Перевыпустить токен</button></form>
+{% if is_admin %}<form method="post" action="/ui/clients/{{ c.id }}/rotate" onsubmit="return confirm('Старый токен сразу перестанет работать. Продолжить?')" style="margin-left:auto">
+<input type="hidden" name="csrf" value="{{ csrf }}"><button>Перевыпустить токен</button></form>{% endif %}
 <a class="btn" href="/ui/executions?client_id={{ c.id }}">Запуски</a><a class="btn" href="/ui/audit?actor={{ c.name }}">Журнал</a>
 </div>
 {% endif %}
@@ -51,9 +52,9 @@
 <div><label>Приоритет (меньше — раньше)</label><input type="number" name="priority" value="{{ c.priority }}"></div>
 </div>
 <div class="muted small">0 = без ограничения</div>
-<label>Токен действует до ({{ tz_label() }}, пусто = бессрочно)</label>
+<label>Токен действует до (пусто = бессрочно)</label>
 <input type="datetime-local" name="token_expires_at" value="{{ c.token_expires_at|dt_input }}">
-<p><button class="primary">{% if is_new %}Создать и выдать токен{% else %}Сохранить{% endif %}</button></p>
+{% if is_admin %}<p><button class="primary">{% if is_new %}Создать и выдать токен{% else %}Сохранить{% endif %}</button></p>{% endif %}
 </form>
 
 {% if recent_audit %}

@@ -32,10 +32,12 @@ def cmd_create_admin(args) -> None:
         if user:
             user.password_hash = hash_password(password)
             user.enabled = True
-            print(f"admin '{args.username}' password updated")
+            if args.role:
+                user.role = args.role
+            print(f"user '{args.username}' updated (role: {user.role})")
         else:
-            db.add(AdminUser(username=args.username, password_hash=hash_password(password)))
-            print(f"admin '{args.username}' created")
+            db.add(AdminUser(username=args.username, password_hash=hash_password(password), role=args.role or "admin"))
+            print(f"user '{args.username}' created (role: {args.role or 'admin'})")
         audit(db, actor_type="admin", actor="cli", action="admin.create", message=args.username)
 
 
@@ -81,9 +83,10 @@ def main() -> None:
     w = sub.add_parser("worker", help="run the coordinator (dispatch + bulk polling of Qlik)")
     w.set_defaults(fn=cmd_worker)
 
-    ad = sub.add_parser("create-admin", help="create an admin UI user or reset its password")
+    ad = sub.add_parser("create-admin", help="create a UI user or reset its password")
     ad.add_argument("username")
     ad.add_argument("--password")
+    ad.add_argument("--role", choices=["admin", "viewer"], help="admin: everything; viewer: read-only")
     ad.set_defaults(fn=cmd_create_admin)
 
     c = sub.add_parser("create-client", help="register an API client and print its token")

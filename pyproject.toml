@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qlik-gateway"
-version = "0.2.0"
+version = "0.3.0"
 description = "Buffer service between external schedulers (Airflow, platform teams) and Qlik Sense QRS API"
 requires-python = ">=3.10"
 dependencies = [
@@ -32,7 +32,7 @@ qlik-gateway = "qlik_gateway.cli:main"
 include = ["qlik_gateway*"]
 
 [tool.setuptools.package-data]
-qlik_gateway = ["templates/*.html", "static/*"]
+qlik_gateway = ["templates/*.html", "static/*", "static/vendor/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,9 +1,8 @@
 """Smoke test of the Qlik Gateway integration. Trigger manually ("Trigger DAG w/ config" to change params).
 
-1. check_gateway     - token works, shows the client's rights and the task as the gateway sees it
-2. reload_and_wait   - start a reload and wait in the worker (simplest mode)
-3. start_reload      - start without waiting ...
-4. wait_reload       - ... and wait with a sensor in reschedule mode (no worker slot between pokes)
+1. reload_and_wait - checks the token and the task (built into the operator), starts a reload and waits
+2. start_reload    - starts without waiting ...
+3. wait_reload     - ... and waits with a sensor in reschedule mode (no worker slot between pokes)
 
 Needs the connection `qlik_gateway_default` (HTTP, host/port of the gateway, password = client token).
 """
@@ -16,13 +15,12 @@ from datetime import datetime
 # subfolder that is not on sys.path): make it importable either way.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from qlik_gateway_provider import QlikExecutionSensor, QlikGatewayHook, QlikReloadOperator  # noqa: E402
+from qlik_gateway_provider import QlikExecutionSensor, QlikReloadOperator  # noqa: E402
 
 try:  # Airflow 3
-    from airflow.sdk import DAG, Param, task
+    from airflow.sdk import DAG, Param
 except ImportError:  # Airflow 2
     from airflow import DAG
-    from airflow.decorators import task
     from airflow.models.param import Param
 
 
@@ -37,18 +35,6 @@ with DAG(
     },
     default_args={"owner": "bi-platform", "retries": 0},
 ) as dag:
-
-    @task
-    def check_gateway(params=None, **context):
-        hook = QlikGatewayHook(context=context)
-        me = hook.whoami()
-        print(f"client: {me['client']}, actions: {me['allowed_actions']}, limits: {me['limits']}")
-        info = hook.get_task_info(params["qlik_task_id"])
-        print(f"task: {info['name']} | app: {info['app_name']} | enabled in Qlik: {info['enabled_in_qlik']}")
-        print(f"recent executions: {[(e['execution_id'], e['status']) for e in info['recent_executions']]}")
-        if info["blocked"] or not info["enabled_in_qlik"]:
-            raise ValueError("task is blocked in the gateway or disabled in Qlik")
-
     reload_and_wait = QlikReloadOperator(
         task_id="reload_and_wait",
         qlik_task_id="{{ params.qlik_task_id }}",
@@ -68,4 +54,4 @@ with DAG(
         timeout=3600,
     )
 
-    check_gateway() >> reload_and_wait >> start_reload >> wait_reload
+    reload_and_wait >> start_reload >> wait_reload

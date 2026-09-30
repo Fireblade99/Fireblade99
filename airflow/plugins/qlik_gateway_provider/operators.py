@@ -24,6 +24,8 @@ class QlikReloadOperator(BaseOperator):
     :param max_wait: give up waiting after this long (the reload itself keeps running)
     :param cancel_on_kill: stop the reload if the Airflow task is killed (only if it was started by this task)
     :param push_log: put Qlik's script log into the Airflow task log when the reload fails
+    :param preflight: before starting, check the token and the task (client, rights, task name,
+        blocked/disabled) and log it - replaces a separate "check gateway" task in DAGs
     """
 
     template_fields: Sequence[str] = ("qlik_task_id",)
@@ -41,6 +43,7 @@ class QlikReloadOperator(BaseOperator):
         max_wait: timedelta = timedelta(hours=6),
         cancel_on_kill: bool = True,
         push_log: bool = True,
+        preflight: bool = True,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -53,12 +56,15 @@ class QlikReloadOperator(BaseOperator):
         self.max_wait = max_wait
         self.cancel_on_kill = cancel_on_kill
         self.push_log = push_log
+        self.preflight = preflight
         self._execution_id: int | None = None
         self._owned = False
         self._hook: QlikGatewayHook | None = None
 
     def execute(self, context):
         self._hook = hook = QlikGatewayHook(self.gateway_conn_id, context=context)
+        if self.preflight:
+            self._preflight(hook)
         started = hook.start_task(self.qlik_task_id, dedupe=self.dedupe)
         self._execution_id = started["execution_id"]
         self._owned = not started.get("deduplicated")
@@ -90,6 +96,23 @@ class QlikReloadOperator(BaseOperator):
             self._execution_id, poll_interval=self.poll_interval, timeout=self.max_wait.total_seconds()
         )
         return self._handle_result(state, hook)
+
+    def _preflight(self, hook: QlikGatewayHook) -> None:
+        """Fail early with a clear message instead of a bare HTTP error from the start call."""
+        me = hook.whoami()  # 401/403 here = wrong/blocked token or IP not allowed
+        self.log.info("Qlik Gateway client '%s', actions: %s", me["client"], ", ".join(me["allowed_actions"]))
+        if "start" not in me["allowed_actions"]:
+            raise AirflowException(f"Client '{me['client']}' is not allowed to start reloads (no 'start' right)")
+        if "info" not in me["allowed_actions"]:
+            return  # task details are not visible to this client; the start call will validate the task
+        info = hook.get_task_info(self.qlik_task_id)  # 403 = no access to the task, 404 = not in the catalog
+        self.log.info("Qlik task '%s' (app '%s')", info["name"], info["app_name"])
+        if info.get("blocked"):
+            raise AirflowException(f"Qlik task '{info['name']}' is blocked in the gateway")
+        if not info.get("enabled_in_qlik", True):
+            raise AirflowException(f"Qlik task '{info['name']}' is disabled in Qlik")
+        if info.get("active_execution_id"):
+            self.log.info("The task is already queued/running (execution %s)", info["active_execution_id"])
 
     def execute_complete(self, context, event=None):
         hook = QlikGatewayHook(self.gateway_conn_id, context=context)

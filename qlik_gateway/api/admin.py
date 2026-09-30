@@ -17,6 +17,7 @@ from ..models import ACTIONS, AdminUser, AuditLog, Client, ExecStatus, Execution
 from ..qlik import QlikError
 from ..security import generate_client_token, verify_password
 from ..services import executions as svc
+from ..services import runtime
 from ..services.audit import audit
 from ..services.errors import ServiceError
 from ..services.kv import DISPATCH_PAUSED, dispatch_paused, set_value
@@ -59,11 +60,23 @@ def tz_label() -> str:
     return f"UTC{sign}{hours}" + (f":{minutes:02d}" if minutes else "")
 
 
-templates.env.filters["dt"] = lambda d: to_local(d).strftime("%Y-%m-%d %H:%M:%S") if d else "—"
+templates.env.filters["dt"] = lambda d: to_local(d).strftime("%d.%m.%Y %H:%M:%S") if d else "—"
 templates.env.filters["dt_input"] = lambda d: to_local(d).strftime("%Y-%m-%dT%H:%M") if d else ""
 templates.env.globals["tz_label"] = tz_label
 templates.env.filters["iso_dt"] = lambda s: templates.env.filters["dt"](datetime.fromisoformat(s)) if s else "—"
-templates.env.filters["dur"] = lambda s: "—" if s is None else (f"{s:.0f}с" if s < 120 else f"{s / 60:.1f}м")
+
+
+def fmt_duration(seconds: float | None) -> str:
+    """3 -> 00:00:03, 3725 -> 01:02:05 (days are folded into hours)."""
+    if seconds is None:
+        return "—"
+    total = max(0, int(round(seconds)))
+    h, rest = divmod(total, 3600)
+    m, s = divmod(rest, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+templates.env.filters["dur"] = fmt_duration
 
 
 class NotLoggedIn(Exception):
@@ -72,8 +85,19 @@ class NotLoggedIn(Exception):
 
 def admin_user(request: Request) -> str:
     user = request.session.get("admin")
-    if not user:
+    if not user or not request.session.get("role"):  # sessions from before roles existed: log in again
         raise NotLoggedIn()
+    return user
+
+
+def is_admin(request: Request) -> bool:
+    return request.session.get("role") == "admin"
+
+
+def require_admin(request: Request, user: str = Depends(admin_user)) -> str:
+    """Actions that change anything; a viewer only looks."""
+    if not is_admin(request):
+        raise HTTPException(403, "Недостаточно прав: действие доступно только администратору")
     return user
 
 
@@ -94,6 +118,8 @@ async def check_csrf(request: Request) -> None:
 
 def render(request: Request, name: str, **ctx) -> HTMLResponse:
     ctx.setdefault("admin", request.session.get("admin"))
+    ctx["is_admin"] = is_admin(request)
+    ctx["role"] = request.session.get("role")
     ctx["csrf"] = csrf_token(request)
     ctx["flash"] = request.session.pop("flash", None)
     return templates.TemplateResponse(request, name, ctx)
@@ -145,6 +171,7 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
         return back("/ui/login")
     request.session.clear()
     request.session["admin"] = username
+    request.session["role"] = user.role or "admin"
     return back("/ui/")
 
 
@@ -175,12 +202,14 @@ def dashboard(request: Request, user: str = Depends(admin_user), db: Session = D
     ).all()
 
     fail_expr = func.sum(case((Execution.status.not_in([ExecStatus.SUCCESS, *ExecStatus.ACTIVE]), 1), else_=0))
+    ok_expr = func.sum(case((Execution.status == ExecStatus.SUCCESS, 1), else_=0))
     starts = {
         r.client_id: r
         for r in db.execute(
             select(
                 Execution.client_id,
                 func.count(Execution.id).label("starts"),
+                ok_expr.label("ok"),
                 fail_expr.label("fails"),
                 func.sum(Execution.dedup_hits).label("dedup"),
             )
@@ -210,6 +239,7 @@ def dashboard(request: Request, user: str = Depends(admin_user), db: Session = D
                 "calls": k.calls if k else 0,
                 "rejected": (k.rejected or 0) if k else 0,
                 "starts": s.starts if s else 0,
+                "ok": (s.ok or 0) if s else 0,
                 "fails": (s.fails or 0) if s else 0,
                 "dedup": (s.dedup or 0) if s else 0,
             }
@@ -228,9 +258,20 @@ def dashboard(request: Request, user: str = Depends(admin_user), db: Session = D
         .order_by(func.count(Execution.id).desc())
         .limit(10)
     ).all()
-    durations = {}
-    for ex in db.scalars(select(Execution).where(Execution.created_at >= day, Execution.qlik_stopped_at.is_not(None))):
-        durations.setdefault(ex.task_id, []).append(ex.duration_seconds or 0)
+    durations: dict[str, list[float]] = {}
+    per_node: dict[str, dict] = {}
+    for ex in db.scalars(select(Execution).where(Execution.created_at >= day, Execution.node.is_not(None))):
+        n = per_node.setdefault(ex.node, {"runs": 0, "ok": 0, "fails": 0, "busy": 0.0, "running": 0})
+        n["runs"] += 1
+        if ex.status == ExecStatus.SUCCESS:
+            n["ok"] += 1
+        elif ex.status in ExecStatus.ACTIVE:
+            n["running"] += 1
+        else:
+            n["fails"] += 1
+        if ex.qlik_stopped_at:
+            durations.setdefault(ex.task_id, []).append(ex.duration_seconds or 0)
+            n["busy"] += ex.duration_seconds or 0
 
     qlik_calls_hour = db.scalar(
         select(func.count(AuditLog.id)).where(AuditLog.actor_type == "qlik", AuditLog.ts >= hour)
@@ -242,7 +283,12 @@ def dashboard(request: Request, user: str = Depends(admin_user), db: Session = D
     )
 
     latest_ids = select(func.max(NodeHealth.id)).group_by(NodeHealth.node)
-    nodes = db.scalars(select(NodeHealth).where(NodeHealth.id.in_(latest_ids)).order_by(NodeHealth.node)).all()
+    health = {h.node: h for h in db.scalars(select(NodeHealth).where(NodeHealth.id.in_(latest_ids)))}
+    # one row per node: executions in 24h (from our history) + last engine health snapshot, if configured
+    nodes = [
+        {"node": name, "stats": per_node.get(name), "health": health.get(name)}
+        for name in sorted(set(per_node) | set(health), key=lambda x: x.lower())
+    ]
 
     return render(
         request,
@@ -256,7 +302,27 @@ def dashboard(request: Request, user: str = Depends(admin_user), db: Session = D
         qlik_errors_hour=qlik_errors_hour,
         nodes=nodes,
         paused=dispatch_paused(db),
-        settings=get_settings(),
+        rt=runtime.effective(db, get_settings()),
+    )
+
+
+# ------------------------------------------------------------------------------------------
+# settings (admin only)
+# ------------------------------------------------------------------------------------------
+@router.get("/settings")
+def settings_page(request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)):
+    s = get_settings()
+    return render(
+        request,
+        "settings.html",
+        paused=dispatch_paused(db),
+        rt=runtime.effective(db, s),
+        env={
+            "max_concurrent_executions": s.max_concurrent_executions,
+            "poll_interval_seconds": s.poll_interval_seconds,
+        },
+        limits=runtime.LIMITS,
+        users=db.scalars(select(AdminUser).order_by(AdminUser.username)).all(),
     )
 
 
@@ -265,7 +331,7 @@ def toggle_dispatch(
     request: Request,
     pause: str = Form(...),
     reason: str = Form(""),
-    user: str = Depends(admin_user),
+    user: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     if pause == "1":
@@ -276,7 +342,46 @@ def toggle_dispatch(
         set_value(db, DISPATCH_PAUSED, None)
         admin_audit(db, request, "dispatch.resume")
         flash(request, "Запуск задач возобновлён")
-    return back("/ui/")
+    return back("/ui/settings")
+
+
+@router.post("/settings/runtime", dependencies=[Depends(check_csrf)])
+def save_runtime(
+    request: Request,
+    max_concurrent_executions: str = Form(...),
+    poll_interval_seconds: str = Form(...),
+    reset: str = Form(""),
+    user: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    before = runtime.effective(db, get_settings())
+    if reset:
+        runtime.reset(db)
+        admin_audit(db, request, "settings.reset")
+        flash(request, "Параметры сброшены к значениям из .env")
+        return back("/ui/settings")
+    try:
+        saved = runtime.save(
+            db,
+            {"max_concurrent_executions": max_concurrent_executions, "poll_interval_seconds": poll_interval_seconds},
+        )
+    except ValueError as e:
+        flash(request, f"Не сохранено: {e}", "bad")
+        return back("/ui/settings")
+    admin_audit(
+        db,
+        request,
+        "settings.update",
+        meta={
+            "before": {
+                "max_concurrent_executions": before.max_concurrent_executions,
+                "poll_interval_seconds": before.poll_interval_seconds,
+            },
+            "after": saved,
+        },
+    )
+    flash(request, "Сохранено. Координатор применит параметры на следующем такте (в течение нескольких секунд).")
+    return back("/ui/settings")
 
 
 # ------------------------------------------------------------------------------------------
@@ -292,7 +397,7 @@ def clients_page(request: Request, user: str = Depends(admin_user), db: Session 
 
 
 @router.get("/clients/new")
-def client_new_page(request: Request, user: str = Depends(admin_user), db: Session = Depends(get_db)):
+def client_new_page(request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)):
     s = get_settings()
     blank = Client(
         name="",
@@ -341,7 +446,7 @@ def _apply_client_form(c: Client, form) -> None:
 
 
 @router.post("/clients/new", dependencies=[Depends(check_csrf)])
-async def client_create(request: Request, user: str = Depends(admin_user), db: Session = Depends(get_db)):
+async def client_create(request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)):
     form = await request.form()
     name = str(form.get("name", "")).strip()
     if not name or db.scalars(select(Client).where(Client.name == name)).first():
@@ -383,7 +488,7 @@ def client_edit_page(client_id: int, request: Request, user: str = Depends(admin
 
 @router.post("/clients/{client_id}", dependencies=[Depends(check_csrf)])
 async def client_update(
-    client_id: int, request: Request, user: str = Depends(admin_user), db: Session = Depends(get_db)
+    client_id: int, request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)
 ):
     c = db.get(Client, client_id) or _404()
     form = await request.form()
@@ -413,7 +518,7 @@ def client_block(
     reason: str = Form(""),
     cancel_queued: str = Form(""),
     stop_running: str = Form(""),
-    user: str = Depends(admin_user),
+    user: str = Depends(require_admin),
     db: Session = Depends(get_db),
     backend=Depends(get_backend),
 ):
@@ -445,7 +550,7 @@ def client_block(
 
 
 @router.post("/clients/{client_id}/unblock", dependencies=[Depends(check_csrf)])
-def client_unblock(client_id: int, request: Request, user: str = Depends(admin_user), db: Session = Depends(get_db)):
+def client_unblock(client_id: int, request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)):
     c = db.get(Client, client_id) or _404()
     c.enabled = True
     c.blocked_reason = ""
@@ -455,7 +560,7 @@ def client_unblock(client_id: int, request: Request, user: str = Depends(admin_u
 
 
 @router.post("/clients/{client_id}/rotate", dependencies=[Depends(check_csrf)])
-def client_rotate(client_id: int, request: Request, user: str = Depends(admin_user), db: Session = Depends(get_db)):
+def client_rotate(client_id: int, request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)):
     c = db.get(Client, client_id) or _404()
     token, prefix, token_hash = generate_client_token()
     c.token_prefix, c.token_hash, c.token_created_at = prefix, token_hash, utcnow()
@@ -485,7 +590,7 @@ def tasks_page(request: Request, user: str = Depends(admin_user), db: Session = 
 
 @router.post("/tasks/sync", dependencies=[Depends(check_csrf)])
 def tasks_sync(
-    request: Request, user: str = Depends(admin_user), db: Session = Depends(get_db), backend=Depends(get_backend)
+    request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db), backend=Depends(get_backend)
 ):
     try:
         n = svc.sync_catalog(db, backend)
@@ -496,6 +601,22 @@ def tasks_sync(
     return back("/ui/tasks")
 
 
+@router.get("/tasks/{task_id}/edit")
+def task_edit_page(task_id: str, request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)):
+    t = db.get(QlikTask, task_id) or _404()
+    last_runs = db.scalars(
+        select(Execution).where(Execution.task_id == task_id).order_by(Execution.id.desc()).limit(10)
+    ).all()
+    clients = db.scalars(select(Client)).all()
+    return render(
+        request,
+        "task_edit.html",
+        t=t,
+        last_runs=last_runs,
+        users=[c.name for c in clients if svc.client_can_task(c, t.id, t)],
+    )
+
+
 @router.post("/tasks/{task_id}", dependencies=[Depends(check_csrf)])
 def task_update(
     task_id: str,
@@ -503,7 +624,7 @@ def task_update(
     blocked: str = Form(""),
     blocked_reason: str = Form(""),
     min_interval_seconds: int = Form(0),
-    user: str = Depends(admin_user),
+    user: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     t = db.get(QlikTask, task_id) or _404()
@@ -517,7 +638,7 @@ def task_update(
         task_id=task_id,
         meta={"blocked": t.blocked, "reason": t.blocked_reason, "min_interval": t.min_interval_seconds},
     )
-    flash(request, f"Задача «{t.name}» обновлена")
+    flash(request, f"Задача «{t.name}» сохранена")
     return back("/ui/tasks")
 
 
@@ -531,31 +652,95 @@ def executions_page(
     status: str = "",
     task: str = "",
     initiator: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    per_page: int = 50,
     page: int = 1,
     user: str = Depends(admin_user),
     db: Session = Depends(get_db),
 ):
-    q = select(Execution)
-    if client_id:
-        q = q.where(Execution.client_id == int(client_id))
+    conds = []
+    if client_id.isdigit():
+        conds.append(Execution.client_id == int(client_id))
     if status:
-        q = q.where(Execution.status == status)
+        conds.append(Execution.status == status)
     if task:
-        q = q.where((Execution.task_id == task) | Execution.task_name.ilike(f"%{task}%"))
+        t = task.strip().lstrip("#")
+        conds.append(
+            (Execution.id == int(t))
+            if t.isdigit()
+            else (Execution.task_id.ilike(f"{t}%") | Execution.task_name.ilike(f"%{t}%"))
+        )
     if initiator:
-        q = q.where(func.lower(func.cast(Execution.initiator, Text())).like(f"%{initiator.lower()}%"))
-    per = 100
-    rows = db.scalars(q.order_by(Execution.id.desc()).offset((page - 1) * per).limit(per + 1)).all()
+        conds.append(func.lower(func.cast(Execution.initiator, Text())).like(f"%{initiator.lower()}%"))
+    conds += _date_conds(Execution.created_at, date_from, date_to)
+
+    f = {
+        "client_id": client_id,
+        "status": status,
+        "task": task,
+        "initiator": initiator,
+        "date_from": date_from,
+        "date_to": date_to,
+        "per_page": per_page,
+    }
+    page_ctx = _paginate(db, Execution, conds, f, page, per_page)
     return render(
         request,
         "executions.html",
-        rows=rows[:per],
-        has_next=len(rows) > per,
-        page=page,
         clients=db.scalars(select(Client).order_by(Client.name)).all(),
         statuses=[*ExecStatus.ACTIVE, *ExecStatus.TERMINAL],
-        f={"client_id": client_id, "status": status, "task": task, "initiator": initiator},
+        **page_ctx,
     )
+
+
+def _date_conds(column, date_from: str, date_to: str) -> list:
+    """Date range typed in the UI time zone. A bare date in date_to means the whole day."""
+    conds = []
+    dt_from = from_local(_parse_dt(date_from))
+    if dt_from:
+        conds.append(column >= dt_from)
+    dt_to = from_local(_parse_dt(date_to))
+    if dt_to:
+        whole_day = len(date_to.strip()) == 10
+        conds.append(column < dt_to + (timedelta(days=1) if whole_day else timedelta(minutes=1)))
+    return conds
+
+
+def _paginate(db: Session, model, conds: list, f: dict, page: int, per_page: int) -> dict:
+    per_page = per_page if per_page in PAGE_SIZES else 50
+    f["per_page"] = per_page
+    total = db.scalar(select(func.count(model.id)).where(*conds))
+    pages = max(1, -(-total // per_page))
+    page = min(max(1, page), pages)
+    rows = db.scalars(
+        select(model).where(*conds).order_by(model.id.desc()).offset((page - 1) * per_page).limit(per_page)
+    ).all()
+    now = to_local(utcnow())
+    keep = {k: v for k, v in f.items() if v and k not in ("date_from", "date_to")}
+    presets = [
+        (label, urlencode({**keep, "date_from": _fmt_dt(now - delta)}))
+        for label, delta in (
+            ("15 минут", timedelta(minutes=15)),
+            ("час", timedelta(hours=1)),
+            ("сутки", timedelta(days=1)),
+            ("неделя", timedelta(days=7)),
+        )
+    ]
+    return {
+        "rows": rows,
+        "f": f,
+        "total": total,
+        "page": page,
+        "pages": pages,
+        "per_page": per_page,
+        "page_sizes": PAGE_SIZES,
+        "qs": urlencode({k: v for k, v in f.items() if v}),
+        "qs_base": urlencode({k: v for k, v in f.items() if v and k != "per_page"}),
+        "presets": presets,
+        "first_row": (page - 1) * per_page + 1 if total else 0,
+        "last_row": min(page * per_page, total),
+    }
 
 
 @router.get("/executions/{execution_id}")
@@ -589,7 +774,7 @@ def execution_log_page(
 def execution_cancel(
     execution_id: int,
     request: Request,
-    user: str = Depends(admin_user),
+    user: str = Depends(require_admin),
     db: Session = Depends(get_db),
     backend=Depends(get_backend),
 ):
@@ -635,20 +820,7 @@ def audit_page(
     if target:  # task id (or its beginning) or execution number
         t = target.strip().lstrip("#")
         conds.append((AuditLog.execution_id == int(t)) if t.isdigit() else AuditLog.task_id.ilike(f"{t}%"))
-    dt_from, dt_to = from_local(_parse_dt(date_from)), from_local(_parse_dt(date_to))
-    if dt_from:
-        conds.append(AuditLog.ts >= dt_from)
-    if dt_to:
-        conds.append(AuditLog.ts < dt_to + timedelta(minutes=1))  # the minute given is inclusive
-
-    per_page = per_page if per_page in PAGE_SIZES else 50
-    total = db.scalar(select(func.count(AuditLog.id)).where(*conds))
-    pages = max(1, -(-total // per_page))
-    page = min(max(1, page), pages)
-    rows = db.scalars(
-        select(AuditLog).where(*conds).order_by(AuditLog.id.desc()).offset((page - 1) * per_page).limit(per_page)
-    ).all()
-
+    conds += _date_conds(AuditLog.ts, date_from, date_to)
     f = {
         "actor_type": actor_type,
         "actor": actor,
@@ -660,39 +832,14 @@ def audit_page(
         "date_to": date_to,
         "per_page": per_page,
     }
-    now = to_local(utcnow())
-    presets = [
-        (label, urlencode({**{k: v for k, v in f.items() if v}, "date_from": _fmt_dt(now - delta), "date_to": ""}))
-        for label, delta in (
-            ("15 минут", timedelta(minutes=15)),
-            ("час", timedelta(hours=1)),
-            ("сутки", timedelta(days=1)),
-            ("неделя", timedelta(days=7)),
-        )
-    ]
-    return render(
-        request,
-        "audit.html",
-        rows=rows,
-        f=f,
-        total=total,
-        page=page,
-        pages=pages,
-        per_page=per_page,
-        page_sizes=PAGE_SIZES,
-        qs=urlencode({k: v for k, v in f.items() if v}),
-        qs_base=urlencode({k: v for k, v in f.items() if v and k != "per_page"}),
-        presets=presets,
-        first_row=(page - 1) * per_page + 1 if total else 0,
-        last_row=min(page * per_page, total),
-    )
+    return render(request, "audit.html", **_paginate(db, AuditLog, conds, f, page, per_page))
 
 
 PAGE_SIZES = (20, 50, 100)
 
 
 def _parse_dt(value: str) -> datetime | None:
-    """<input type=datetime-local> value (UI time zone, converted by the caller)."""
+    """'YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM' in the UI time zone (converted by the caller)."""
     try:
         return datetime.fromisoformat(value.strip()) if value.strip() else None
     except ValueError:

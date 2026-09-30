@@ -1,14 +1,19 @@
 {% extends "base.html" %}{% block content %}
 <h1>Запуски</h1>
-<form class="filters" method="get">
+<form class="filters card" method="get">
 <div><label>Клиент</label><select name="client_id"><option value="">все</option>{% for c in clients %}<option value="{{ c.id }}" {% if f.client_id == c.id|string %}selected{% endif %}>{{ c.name }}</option>{% endfor %}</select></div>
 <div><label>Статус</label><select name="status"><option value="">все</option>{% for s in statuses %}<option {% if f.status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></div>
-<div><label>Задача (имя/ID)</label><input type="text" name="task" value="{{ f.task }}"></div>
+<div><label>Задача (имя / ID / #запуск)</label><input type="text" name="task" value="{{ f.task }}"></div>
 <div><label>Инициатор (dag, run…)</label><input type="text" name="initiator" value="{{ f.initiator }}"></div>
-<div><button class="primary">Найти</button></div></form>
+{% include "_daterange.html" %}
+<input type="hidden" name="per_page" value="{{ per_page }}">
+<div><button class="primary">Найти</button> <a class="btn" href="/ui/executions">Сбросить</a></div>
+<div class="presets small"><span class="muted">Быстро:</span> {% for label, q in presets %}<a href="?{{ q }}">{{ label }}</a>{% endfor %}</div>
+</form>
+{% include "_pagination.html" %}
 <div class="table-wrap"><table>{% include "_exec_head.html" %}
 {% for e in rows %}{% include "_exec_row.html" %}{% else %}<tr><td colspan="9" class="muted">Ничего не найдено</td></tr>{% endfor %}
 </table></div>
-<p>{% if page > 1 %}<a href="?client_id={{ f.client_id }}&status={{ f.status }}&task={{ f.task }}&initiator={{ f.initiator }}&page={{ page-1 }}">← назад</a>{% endif %}
-{% if has_next %}<a href="?client_id={{ f.client_id }}&status={{ f.status }}&task={{ f.task }}&initiator={{ f.initiator }}&page={{ page+1 }}" style="float:right">дальше →</a>{% endif %}</p>
+{% include "_pagination.html" %}
 {% endblock %}
+{% block scripts %}{% include "_daterange_js.html" %}{% endblock %}

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..config import Settings, get_settings
 from ..models import Client, ExecStatus, Execution, NodeHealth, QlikTask, utcnow
 from ..qlik import QlikBackend, QlikError, map_qlik_status
+from . import runtime
 from .audit import audit
 from .errors import ServiceError
 from .kv import dispatch_paused
@@ -154,7 +155,7 @@ def dispatch(db: Session, backend: QlikBackend, settings: Settings) -> int:
         return 0
 
     in_qlik = db.scalar(select(func.count(Execution.id)).where(Execution.status.in_(ExecStatus.IN_QLIK)))
-    free = settings.max_concurrent_executions - in_qlik
+    free = runtime.effective(db, settings).max_concurrent_executions - in_qlik
     if free <= 0:
         return 0
 

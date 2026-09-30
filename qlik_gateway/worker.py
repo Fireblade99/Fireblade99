@@ -19,6 +19,7 @@ from .db import session_scope
 from .models import KV, AuditLog, NodeHealth, utcnow
 from .qlik import QlikError, make_backend
 from .services import executions as svc
+from .services import runtime as svc_runtime
 from .services.audit import audit, qlik_call_hook
 from .services.kv import dispatch_paused
 from .services.metrics import DISPATCH_PAUSED
@@ -64,7 +65,9 @@ class Coordinator:
 
         stats["dispatched"] = self._safe("dispatch", lambda db: svc.dispatch(db, self.backend, self.s))
 
-        if force or now - self._last["poll"] >= self.s.poll_interval_seconds:
+        with session_scope() as db:
+            poll_every = svc_runtime.effective(db, self.s).poll_interval_seconds
+        if force or now - self._last["poll"] >= poll_every:
             self._last["poll"] = now
             stats["polled"] = self._safe("poll", lambda db: svc.poll(db, self.backend, self.s))
 

@@ -1,21 +1,19 @@
 {% extends "base.html" %}{% block content %}
 <h1>Задачи Qlik
-<form class="inline" method="post" action="/ui/tasks/sync" style="float:right"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Синхронизировать с Qlik</button></form></h1>
-<p class="muted">Каталог reload-задач, доступных через шлюз (приложения с custom property ExternalRun=Yes; кому доступны — по GatewayClient в QMC и ручной выдаче в карточке клиента). Блокировка задачи действует на всех клиентов сразу.</p>
+{% if is_admin %}<form class="inline" method="post" action="/ui/tasks/sync" style="float:right"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Синхронизировать с Qlik</button></form>{% endif %}</h1>
+<p class="muted">Каталог reload-задач, доступных через шлюз: приложения с custom property ExternalRun=Yes. Кому доступна задача — по GatewayClient в QMC и ручной выдаче в карточке клиента. Синхронизация — автоматически раз в 10 минут или кнопкой.</p>
 <div class="table-wrap"><table>
-<tr><th>Задача</th><th>Приложение / поток</th><th>Qlik</th><th>Кому доступна</th><th class="num">Запусков</th><th>Последний</th><th>Управление</th></tr>
+<tr><th>Задача</th><th>Приложение / поток</th><th>Qlik</th><th>Кому доступна</th><th class="num">Запусков</th><th>Последний</th><th>Ограничения</th><th></th></tr>
 {% for t in tasks %}{% set l = last.get(t.id) %}<tr>
 <td>{{ t.name }}<div class="mono muted">{{ t.id }}</div></td>
 <td class="small">{{ t.app_name }}<div class="muted">{{ t.stream_name }}</div></td>
 <td>{% if not t.present_in_qlik %}<span class="badge bad">удалена</span>{% elif t.enabled_in_qlik %}<span class="badge ok">enabled</span>{% else %}<span class="badge muted">disabled</span>{% endif %}</td>
 <td class="small">{{ users[t.id]|join(", ") or "—" }}</td>
 <td class="num">{{ l.n if l else 0 }}</td><td class="small">{{ l.last|dt if l else "—" }}</td>
-<td><form method="post" action="/ui/tasks/{{ t.id }}" class="small">
-<input type="hidden" name="csrf" value="{{ csrf }}">
-<span class="check"><input type="checkbox" name="blocked" value="1" {% if t.blocked %}checked{% endif %}> заблокирована</span>
-<input type="text" name="blocked_reason" value="{{ t.blocked_reason }}" placeholder="причина" style="width:140px;display:inline-block">
-<div>мин. интервал, с <input type="number" name="min_interval_seconds" value="{{ t.min_interval_seconds }}" min="0" style="width:90px;display:inline-block"> <button>OK</button></div>
-</form></td></tr>
-{% else %}<tr><td colspan="7" class="muted">Каталог пуст. Нажмите «Синхронизировать с Qlik».</td></tr>{% endfor %}
+<td class="small">{% if t.blocked %}<span class="badge bad">заблокирована</span><div class="muted">{{ t.blocked_reason }}</div>{% endif %}
+{% if t.min_interval_seconds %}<div>не чаще 1 раза в {{ t.min_interval_seconds|dur }}</div>{% endif %}
+{% if not t.blocked and not t.min_interval_seconds %}<span class="muted">—</span>{% endif %}</td>
+<td>{% if is_admin %}<a class="btn" href="/ui/tasks/{{ t.id }}/edit">Edit</a>{% endif %}</td></tr>
+{% else %}<tr><td colspan="8" class="muted">Каталог пуст. {% if is_admin %}Нажмите «Синхронизировать с Qlik».{% endif %}</td></tr>{% endfor %}
 </table></div>
 {% endblock %}

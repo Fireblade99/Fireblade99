@@ -11,7 +11,7 @@ def _login(http):
     )
     assert r.status_code == 303 and r.headers["location"] == "/ui/"
     # the session (and its CSRF token) is rotated on login
-    return re.search(r'name="csrf" value="([^"]+)"', http.get("/ui/").text).group(1)
+    return re.search(r'name="csrf" value="([^"]+)"', http.get("/ui/settings").text).group(1)
 
 
 def test_ui_requires_login(http):
@@ -108,7 +108,67 @@ def test_ui_time_zone(http, coordinator, settings, monkeypatch):
     with session_scope() as db:
         db.add(AuditLog(actor_type="system", actor="tz-probe", action="x", ts=datetime(2026, 9, 29, 7, 0, 0)))
     page = http.get("/ui/audit?actor=tz-probe").text
-    assert "2026-09-29 12:00:00" in page and "UTC+5" in page  # stored 07:00 UTC -> shown 12:00 UTC+5
+    assert "29.09.2026 12:00:00" in page and "admin (UTC+5)" in page  # stored 07:00 UTC -> shown 12:00 UTC+5
     # the filter is typed in UTC+5: 11:59 local = 06:59 UTC -> includes the 07:00 UTC record
     assert "Показано 1–1 из 1" in http.get("/ui/audit?actor=tz-probe&date_from=2026-09-29T11:59").text
     assert "Нет записей" in http.get("/ui/audit?actor=tz-probe&date_from=2026-09-29T12:01").text
+
+
+def test_settings_runtime_and_roles(http, coordinator, settings):
+    from qlik_gateway.db import session_scope
+    from qlik_gateway.models import AdminUser
+    from qlik_gateway.security import hash_password
+    from qlik_gateway.services import runtime
+
+    csrf = _login(http)
+    r = http.post(
+        "/ui/settings/runtime",
+        data={"csrf": csrf, "max_concurrent_executions": "7", "poll_interval_seconds": "45"},
+    )
+    assert r.status_code == 200 and "Сохранено" in r.text
+    with session_scope() as db:
+        rt = runtime.effective(db, settings)
+        assert (rt.max_concurrent_executions, rt.poll_interval_seconds) == (7, 45)
+    bad = http.post(
+        "/ui/settings/runtime", data={"csrf": csrf, "max_concurrent_executions": "0", "poll_interval_seconds": "45"}
+    )
+    assert "Не сохранено" in bad.text
+    http.post("/ui/dispatch", data={"csrf": csrf, "pause": "1", "reason": "test"})
+    assert "ПРИОСТАНОВЛЕН" in http.get("/ui/").text
+
+    # a viewer sees pages but cannot change anything
+    with session_scope() as db:
+        db.add(AdminUser(username="viewer", password_hash=hash_password("v-pass"), role="viewer"))
+    http.post("/ui/logout")
+    page = http.get("/ui/login").text
+    token = re.search(r'name="csrf" value="([^"]+)"', page).group(1)
+    http.post("/ui/login", data={"username": "viewer", "password": "v-pass", "csrf": token})
+    home = http.get("/ui/").text
+    assert "просмотр" in home and "/ui/settings" not in home
+    assert http.get("/ui/settings").status_code == 403
+    assert http.get("/ui/executions").status_code == 200
+    csrf_v = re.search(r'name="csrf" value="([^"]+)"', http.get("/ui/login").text)
+    token_v = csrf_v.group(1) if csrf_v else ""
+    assert http.post("/ui/dispatch", data={"csrf": token_v, "pause": "0"}).status_code in (400, 403)
+    assert "Edit" not in http.get("/ui/tasks").text
+
+
+def test_formats_and_executions_page(http, coordinator, make_client):
+    from qlik_gateway.api.admin import fmt_duration
+
+    assert fmt_duration(3) == "00:00:03" and fmt_duration(3725) == "01:02:05" and fmt_duration(None) == "—"
+    _, h = make_client()
+    for _ in range(3):
+        http.post(f"/api/v1/tasks/{SALES}/start", headers=h, json={"dedupe": False})
+    _login(http)
+    page = http.get("/ui/executions?per_page=20").text
+    assert "Показано 1–3 из 3" in page and "js-range" in page
+    from qlik_gateway.api.admin import to_local
+    from qlik_gateway.models import utcnow
+
+    today = to_local(utcnow()).strftime("%Y-%m-%d")  # the UI filter is in the UI time zone
+    assert "Показано 1–3 из 3" in http.get(f"/ui/executions?date_from={today}&date_to={today}").text
+    assert "Нет записей" in http.get("/ui/executions?date_from=2020-01-01&date_to=2020-01-02").text
+    edit = http.get(f"/ui/tasks/{SALES}/edit").text
+    assert "Минимальный интервал" in edit
+    assert http.get("/static/vendor/flatpickr.min.js").status_code == 200

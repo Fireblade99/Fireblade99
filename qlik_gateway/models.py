@@ -190,6 +190,8 @@ class AdminUser(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str] = mapped_column(String(100), unique=True)
     password_hash: Mapped[str] = mapped_column(String(300))
+    # "admin" - everything; "viewer" - read-only (monitoring, executions, tasks, audit)
+    role: Mapped[str] = mapped_column(String(20), default="admin", server_default="admin")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
