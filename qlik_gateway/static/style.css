@@ -47,8 +47,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);padding:12px
 .pg.cur{background:var(--accent);border-color:var(--accent);color:#fff}.pg.off{color:var(--muted);opacity:.5}
 a.pg:hover{text-decoration:none;border-color:var(--accent)}
 .statusline{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
-.filters .daterange{width:280px}.daterange-box{display:flex;align-items:center;gap:6px}.daterange-box input{flex:1;cursor:pointer}
-.daterange-box button{height:34px;padding:0 10px}
+.filters .daterange{width:290px;max-width:none}.daterange-box{display:flex;flex-wrap:nowrap;align-items:center;gap:6px;width:100%}.daterange-box input{flex:1 1 auto;min-width:0;width:auto;cursor:pointer}
+.daterange-box button{flex:0 0 auto;height:34px;padding:0 10px}
 .nowrap{white-space:nowrap}
 
 .page-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px}.page-head h1{margin:0}

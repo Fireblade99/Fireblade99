@@ -1,7 +1,7 @@
-<link rel="stylesheet" href="/static/vendor/flatpickr.min.css">
-<link rel="stylesheet" href="/static/vendor/flatpickr-dark.css" media="(prefers-color-scheme: dark)">
-<script src="/static/vendor/flatpickr.min.js"></script>
-<script src="/static/vendor/ru.js"></script>
+<link rel="stylesheet" href="/static/vendor/flatpickr.min.css?v={{ app_version }}">
+<link rel="stylesheet" href="/static/vendor/flatpickr-dark.css?v={{ app_version }}" media="(prefers-color-scheme: dark)">
+<script src="/static/vendor/flatpickr.min.js?v={{ app_version }}"></script>
+<script src="/static/vendor/ru.js?v={{ app_version }}"></script>
 <script>
 document.querySelectorAll('.js-range').forEach(function (inp) {
   var form = inp.form, from = form.elements.date_from, to = form.elements.date_to;

@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import Text, case, func, select
 from sqlalchemy.orm import Session
 
+from .. import __version__
 from ..config import get_settings
 from ..db import get_db
 from ..models import ACTIONS, AdminUser, AuditLog, Client, ExecStatus, Execution, NodeHealth, QlikTask, utcnow
@@ -63,6 +64,7 @@ def tz_label() -> str:
 templates.env.filters["dt"] = lambda d: to_local(d).strftime("%d.%m.%Y %H:%M:%S") if d else "—"
 templates.env.filters["dt_input"] = lambda d: to_local(d).strftime("%Y-%m-%dT%H:%M") if d else ""
 templates.env.globals["tz_label"] = tz_label
+templates.env.globals["app_version"] = __version__  # cache-busting for static files
 templates.env.filters["iso_dt"] = lambda s: templates.env.filters["dt"](datetime.fromisoformat(s)) if s else "—"
 
 
