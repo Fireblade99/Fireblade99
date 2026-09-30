@@ -7,3 +7,5 @@ venv/
 *.db
 .env
 secrets/
+*.db-shm
+*.db-wal
