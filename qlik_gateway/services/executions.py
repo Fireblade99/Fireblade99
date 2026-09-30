@@ -76,8 +76,19 @@ def submit(
     caller_ip: str | None,
     priority: int | None = None,
     dedupe: bool = True,
+    if_running: str | None = None,
+    running_info=None,
 ) -> tuple[Execution, bool]:
-    """Accept a start request. Returns (execution, deduplicated)."""
+    """Accept a start request. Returns (execution, deduplicated).
+
+    if_running - what to do when the same task is already queued/running (for any client):
+      "attach" - return that execution instead of starting another one (default, = dedupe=True)
+      "queue"  - queue a new execution that starts after the current one finishes (= dedupe=False)
+      "skip"   - start nothing, answer 409 "already_running" with the running execution
+    """
+    policy = if_running or ("attach" if dedupe else "queue")
+    if policy not in ("attach", "queue", "skip"):
+        raise ServiceError(422, "bad_if_running", "if_running must be attach, queue or skip")
     require_action(client, "start")
     task = require_task(db, client, task_id)
 
@@ -88,9 +99,16 @@ def submit(
 
     # The same reload running twice only wastes engine resources: attach to the existing one.
     existing = active_execution_for_task(db, task_id)
-    if existing is not None and dedupe:
+    if existing is not None and policy == "attach":
         existing.dedup_hits += 1
         return existing, True
+    if existing is not None and policy == "skip":
+        raise ServiceError(
+            409,
+            "already_running",
+            f"Task is already {existing.status.lower()} (execution {existing.id}); nothing was started",
+            {"running_execution": running_info(existing) if running_info else {"execution_id": existing.id}},
+        )
 
     now = utcnow()
     starts_last_hour = db.scalar(

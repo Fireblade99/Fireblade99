@@ -5,6 +5,6 @@ except ImportError:  # Airflow 2.x
     from airflow.models import BaseOperator
     from airflow.sensors.base import BaseSensorOperator
 
-from airflow.exceptions import AirflowException
+from airflow.exceptions import AirflowException, AirflowSkipException
 
-__all__ = ["AirflowException", "BaseHook", "BaseOperator", "BaseSensorOperator"]
+__all__ = ["AirflowException", "AirflowSkipException", "BaseHook", "BaseOperator", "BaseSensorOperator"]

@@ -238,3 +238,24 @@ def test_other_clients_do_not_see_initiator(http, coordinator, make_client):
     assert not shared["own"] and shared["initiator"] == {} and shared["client"] is None
     assert http.get(f"/api/v1/executions/{eid}", headers=c).status_code == 404  # no access to the task
     assert http.get("/api/v1/executions", headers=b).json() == []  # list shows own runs only
+
+
+def test_if_running_skip_and_queue_via_api(http, coordinator, make_client):
+    _, a = make_client("team-a")
+    _, b = make_client("team-b")
+    first = http.post(f"/api/v1/tasks/{SALES}/start", headers={**a, "X-Airflow-Dag-Id": "dag_a"}).json()
+    assert first["running_execution"] is None  # the task was idle
+
+    skip = http.post(f"/api/v1/tasks/{SALES}/start", headers=b, json={"if_running": "skip"})
+    assert skip.status_code == 409 and skip.json()["error"] == "already_running"
+    run = skip.json()["running_execution"]
+    assert run["execution_id"] == first["execution_id"] and run["own"] is False and run["initiator"] == {}
+
+    queued = http.post(f"/api/v1/tasks/{SALES}/start", headers=b, json={"if_running": "queue"}).json()
+    assert queued["execution_id"] != first["execution_id"] and not queued["deduplicated"]
+    assert queued["running_execution"]["execution_id"] == first["execution_id"]
+
+    attached = http.post(f"/api/v1/tasks/{SALES}/start", headers=a).json()
+    assert attached["deduplicated"] and attached["running_execution"]["own"] is True
+    assert attached["running_execution"]["initiator"]["dag_id"] == "dag_a"
+    assert http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"if_running": "nope"}).status_code == 422

@@ -75,7 +75,7 @@ class QlikGatewayHook(BaseHook):
             self.log.info("Qlik Gateway: %s", base)
         return self._session
 
-    def _call(self, method: str, path: str, *, retries: int = 3, **kwargs) -> dict:
+    def _call(self, method: str, path: str, *, retries: int = 3, accept_errors: tuple = (), **kwargs) -> dict:
         url = f"{self.base_url()}/api/v1{path}"
         for attempt in range(1, retries + 1):
             try:
@@ -91,6 +91,8 @@ class QlikGatewayHook(BaseHook):
             if resp.status_code >= 400:
                 try:
                     body = resp.json()
+                    if body.get("error") in accept_errors:
+                        return body  # an expected business answer, e.g. already_running
                     msg = f"{body.get('error')}: {body.get('message')}"
                 except ValueError:
                     msg = resp.text[:500]
@@ -105,11 +107,20 @@ class QlikGatewayHook(BaseHook):
     def get_task_info(self, qlik_task_id: str) -> dict:
         return self._call("GET", f"/tasks/{qlik_task_id}")
 
-    def start_task(self, qlik_task_id: str, *, dedupe: bool = True, meta: dict | None = None) -> dict:
+    def start_task(
+        self, qlik_task_id: str, *, if_running: str = "attach", dedupe: bool | None = None, meta: dict | None = None
+    ) -> dict:
+        """if_running: attach | queue | skip. With "skip" a busy task returns {"error": "already_running", ...}."""
+        if dedupe is not None:  # legacy argument
+            if_running = "attach" if dedupe else "queue"
         # POST is not retried blindly: a retry after a timeout could start the task twice
         # (the gateway dedupes by default anyway).
         return self._call(
-            "POST", f"/tasks/{qlik_task_id}/start", retries=1, json={"dedupe": dedupe, "meta": meta or {}}
+            "POST",
+            f"/tasks/{qlik_task_id}/start",
+            retries=1,
+            accept_errors=("already_running",),
+            json={"if_running": if_running, "meta": meta or {}},
         )
 
     def get_state(self, execution_id: int, wait: int = 0) -> dict:

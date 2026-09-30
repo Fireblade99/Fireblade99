@@ -89,7 +89,7 @@ curl -s -H "Authorization: Bearer $TOKEN" "localhost:8080/api/v1/executions/1?wa
 | GET | `/api/v1/whoami` | — | кто я, мои права и лимиты |
 | GET | `/api/v1/tasks` | info | доступные мне задачи |
 | GET | `/api/v1/tasks/{task_id}` | info | **getinfo**: задача и последние запуски |
-| POST | `/api/v1/tasks/{task_id}/start` | start | **post task**: поставить reload, ответ `202 {execution_id}` |
+| POST | `/api/v1/tasks/{task_id}/start` | start | **post task**: поставить reload, ответ `202 {execution_id, deduplicated, running_execution}`. Тело: `{"if_running": "attach" \| "queue" \| "skip"}` — что делать, если задача уже в очереди/выполняется (у любого клиента): присоединиться (по умолчанию), поставить новый запуск после текущего, или ничего не запускать (`409 already_running` с информацией о текущем запуске) |
 | GET | `/api/v1/executions/{id}?wait=N` | state | **get state** из БД шлюза, long-poll до 60 с |
 | GET | `/api/v1/executions/{id}/details` | details | **getdetails**: нода, время, сообщения Qlik, инициатор |
 | GET | `/api/v1/executions/{id}/log` | log | лог скрипта Qlik |
@@ -122,6 +122,7 @@ QlikReloadOperator(
 
 * Оператор сам отправляет `dag_id`, `task_id`, `run_id`, `try_number`, `owner` и host, всё это видно в журнале и карточке запуска.
 * При неуспехе хвост лога скрипта Qlik попадает в лог задачи Airflow.
+* `if_running="attach"` (по умолчанию) / `"queue"` / `"skip"` — поведение, если задача Qlik уже запущена кем угодно: присоединиться и дождаться её результата, запустить заново после неё, или пропустить (задача Airflow → skipped). Информация о текущем запуске (номер, статус, время, свой/чужой клиент, для своего — dag/run) пишется в лог и в XCom `running_execution`.
 * При kill задачи reload отменяется, но только если его запустил именно этот таск, а не присоединился к чужому.
 * Вариант fire-and-forget плюс `QlikExecutionSensor(mode="reschedule")` показан в `airflow/dags/example_qlik_reload.py`.
 * Проверка интеграции: DAG `airflow/dags/qlik_gateway_smoke.py` (запуск вручную, параметр `qlik_task_id`). Проверен на Airflow 2.10: проверка токена, reload с ожиданием, запуск + сенсор, `deferrable=True`, неуспешный reload с выводом лога скрипта.

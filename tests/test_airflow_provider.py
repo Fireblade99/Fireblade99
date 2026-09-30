@@ -22,6 +22,10 @@ class _AirflowException(Exception):
     pass
 
 
+class _AirflowSkipException(Exception):
+    pass
+
+
 class _TaskDeferred(Exception):
     def __init__(self, trigger, method_name, timeout=None):
         super().__init__(method_name)
@@ -72,7 +76,9 @@ class _TriggerEvent:
 def _install_stubs():
     mods = {
         "airflow": types.ModuleType("airflow"),
-        "airflow.exceptions": types.SimpleNamespace(AirflowException=_AirflowException),
+        "airflow.exceptions": types.SimpleNamespace(
+            AirflowException=_AirflowException, AirflowSkipException=_AirflowSkipException
+        ),
         "airflow.hooks": types.ModuleType("airflow.hooks"),
         "airflow.hooks.base": types.SimpleNamespace(BaseHook=_BaseHook),
         "airflow.models": types.SimpleNamespace(BaseOperator=_BaseOperator),
@@ -175,3 +181,29 @@ def test_deferrable_trigger_and_sensor(provider, live_gateway):
 
     sensor = provider.QlikExecutionSensor(task_id="wait", execution_id=str(payload["execution_id"]))
     assert sensor.poke({}) is True
+
+
+def test_if_running_policies(provider, live_gateway, mock):
+    for e in list(mock.executions.values()):
+        e["duration"] = 0.5
+    import time as _t
+
+    first = provider.QlikReloadOperator(task_id="a", qlik_task_id=SALES, wait_for_completion=False)
+    ti1 = _TI()
+    first.execute({"ti": ti1})
+    # the reload is queued/running now: the three policies
+    ti2 = _TI()
+    provider.QlikReloadOperator(task_id="b", qlik_task_id=SALES, wait_for_completion=False).execute({"ti": ti2})
+    assert ti2.xcom["execution_id"] == ti1.xcom["execution_id"] and ti2.xcom["deduplicated"] is True
+    assert ti2.xcom["running_execution"]["own"] is True and ti2.xcom["running_execution"]["initiator"]["dag_id"]
+
+    with pytest.raises(_AirflowSkipException):
+        provider.QlikReloadOperator(task_id="c", qlik_task_id=SALES, if_running="skip").execute({"ti": _TI()})
+
+    ti4 = _TI()
+    provider.QlikReloadOperator(task_id="d", qlik_task_id=SALES, if_running="queue", wait_for_completion=False).execute(
+        {"ti": ti4}
+    )
+    assert ti4.xcom["execution_id"] != ti1.xcom["execution_id"] and ti4.xcom["deduplicated"] is False
+    assert ti4.xcom["running_execution"]["execution_id"] == ti1.xcom["execution_id"]
+    _t.sleep(0)

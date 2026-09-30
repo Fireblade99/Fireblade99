@@ -6,6 +6,7 @@ the gateway's database, which the coordinator refreshes with one bulk Qlik call 
 
 import asyncio
 import time
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
@@ -25,7 +26,12 @@ router = APIRouter(prefix="/api/v1", tags=["client API"])
 
 
 class StartRequest(BaseModel):
-    dedupe: bool = Field(True, description="Attach to an already queued/running execution of the same task")
+    if_running: Literal["attach", "queue", "skip"] | None = Field(
+        None,
+        description="If the same task is already queued/running (for any client): attach to it (default), "
+        "queue a new run after it, or skip (409 already_running)",
+    )
+    dedupe: bool = Field(True, description="Legacy: true = if_running=attach, false = if_running=queue")
     priority: int | None = Field(None, description="Lower is sooner; cannot be better than the client's priority")
     meta: dict = Field(default_factory=dict, description="Free-form initiator metadata stored with the execution")
 
@@ -161,12 +167,33 @@ def start_task(
         caller_ip=client_ip(request),
         priority=body.priority,
         dedupe=body.dedupe,
+        if_running=body.if_running,
+        running_info=lambda e: running_info(e, client),
     )
+    running = svc.active_execution_for_task(db, task_id) if not dedup else ex
     db.commit()  # the caller must be able to read the execution as soon as it gets the id
     request.state.audit.update(execution_id=ex.id, message="deduplicated" if dedup else "queued")
     out = exec_state(ex)
     out["deduplicated"] = dedup
+    # the run this request attached to / is queued behind (None if the task was idle)
+    attached_or_behind = dedup or (running is not None and running.id != ex.id)
+    out["running_execution"] = running_info(running, client) if attached_or_behind else None
     return out
+
+
+def running_info(ex: Execution, viewer: Client) -> dict:
+    """Who/when of a run of the same task; the initiator is shown only to its own client."""
+    own = ex.client_id == viewer.id
+    return {
+        "execution_id": ex.id,
+        "status": ex.status,
+        "own": own,
+        "client": ex.client.name if own else None,
+        "initiator": ex.initiator if own else {},
+        "created_at": _iso(ex.created_at),
+        "started_at": _iso(ex.qlik_started_at),
+        "dedup_hits": ex.dedup_hits,
+    }
 
 
 @router.get("/executions", summary="get state of recent executions of this client")

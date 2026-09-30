@@ -113,7 +113,7 @@ def create_app(settings: Settings | None = None, backend=None) -> FastAPI:
     async def service_error(request: Request, exc: ServiceError):
         if isinstance(getattr(request.state, "audit", None), dict):
             request.state.audit["error"] = f"{exc.code}: {exc.message}"
-        return UTF8JSONResponse({"error": exc.code, "message": exc.message}, status_code=exc.status_code)
+        return UTF8JSONResponse({"error": exc.code, "message": exc.message, **exc.extra}, status_code=exc.status_code)
 
     @app.exception_handler(admin.NotLoggedIn)
     async def not_logged_in(request: Request, exc):
