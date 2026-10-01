@@ -1,0 +1,30 @@
+{% extends "base.html" %}{% block content %}
+<h1>Задача «{{ t.name }}»</h1>
+<div class="row">
+<div class="card"><table>
+<tr><th>ID</th><td class="mono">{{ t.id }}</td></tr>
+<tr><th>Приложение</th><td>{{ t.app_name }} <span class="muted small">{{ t.stream_name }}</span></td></tr>
+<tr><th>В Qlik</th><td>{% if not t.present_in_qlik %}<span class="badge bad">удалена</span>{% elif t.enabled_in_qlik %}<span class="badge ok">enabled</span>{% else %}<span class="badge muted">disabled</span>{% endif %}</td></tr>
+<tr><th>Кому доступна</th><td>{{ users|join(", ") or "—" }}</td></tr>
+<tr><th>Синхронизирована</th><td>{{ t.synced_at|dt }}</td></tr>
+</table></div>
+
+<form class="card" method="post" action="/ui/tasks/{{ t.id }}">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<h2 style="margin-top:0">Ограничения</h2>
+<label class="check"><input type="checkbox" name="blocked" value="1" {% if t.blocked %}checked{% endif %}> Заблокирована для всех клиентов</label>
+<div class="muted small">Новые запросы на запуск получат ответ 423 «task_blocked». Уже идущий reload не прерывается.</div>
+<label>Причина блокировки</label><input type="text" name="blocked_reason" value="{{ t.blocked_reason }}" placeholder="будет видна клиенту в ответе API">
+<label>Минимальный интервал между запусками, секунд</label>
+<input type="number" name="min_interval_seconds" value="{{ t.min_interval_seconds }}" min="0" style="max-width:160px">
+<div class="muted small">Защита от слишком частых перезагрузок. Если с момента предыдущего запроса на запуск этой задачи (от любого клиента) прошло меньше указанного времени, новый запрос отклоняется с ответом 429 «task_min_interval». Пример: 3600 — не чаще раза в час. 0 — без ограничения. Схлопывание с ожидающим запуском и reuse лимит не проверяют; новый запуск после активного (queue) — проверяет.</div>
+{% with policy=t.if_running_policy, empty_label="решает клиент (по умолчанию reject)", hint="Пока запуск ждёт в очереди шлюза и ещё не отправлен в Qlik, все запросы любых клиентов схлопываются в него — он прочитает данные на момент старта. Эта настройка решает, что делать, когда reload уже идёт в Qlik. Настройка на задаче важнее настройки клиента и параметра в запросе; клиент получит предупреждение policy_overridden." %}{% include "_on_active.html" %}{% endwith %}
+<p><button class="primary">Сохранить</button> <a class="btn" href="/ui/tasks">Отмена</a></p>
+</form>
+</div>
+
+<h2>Последние запуски</h2>
+<div class="table-wrap"><table>{% include "_exec_head.html" %}
+{% for e in last_runs %}{% include "_exec_row.html" %}{% else %}<tr><td colspan="9" class="muted">Запусков не было</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

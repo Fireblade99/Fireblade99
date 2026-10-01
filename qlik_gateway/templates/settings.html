@@ -1,0 +1,62 @@
+{% extends "base.html" %}{% block content %}
+<h1>Настройки</h1>
+
+<div class="card">
+<h2 style="margin-top:0">Стоп-кран</h2>
+{% if paused %}
+  <p><span class="badge bad">ЗАПУСК В QLIK ПРИОСТАНОВЛЕН</span> <span class="small">кем: {{ paused.by }} · {{ paused.at|iso_dt }} · {{ paused.reason }}</span></p>
+  <p class="muted small">Заявки клиентов принимаются и копятся в очереди, в Qlik ничего не отправляется.</p>
+  <form method="post" action="/ui/dispatch"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="pause" value="0"><button class="primary">Возобновить запуск</button></form>
+{% else %}
+  <p><span class="badge ok">Запуск в Qlik активен</span></p>
+  <p class="muted small">Пауза останавливает отправку всех задач в Qlik. Заявки продолжают приниматься в очередь и уйдут после возобновления. Уже идущие reload не прерываются.</p>
+  <form method="post" action="/ui/dispatch" onsubmit="return confirm('Остановить отправку задач в Qlik?')" class="filters">
+   <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="pause" value="1">
+   <div class="f-xl"><label>Причина</label><input type="text" name="reason" required placeholder="например: инцидент на кластере"></div>
+   <div class="actions"><button class="danger">Стоп-кран: пауза всех запусков</button></div></form>
+{% endif %}
+</div>
+
+<div class="card">
+<h2 style="margin-top:0">Параметры координатора</h2>
+<p class="muted small">Применяются без перезапуска, в течение нескольких секунд. Значения из UI имеют приоритет над .env.</p>
+<form method="post" action="/ui/settings/runtime">
+ <input type="hidden" name="csrf" value="{{ csrf }}">
+ <div class="params">
+  <div class="param"><label>Одновременных reload</label>
+   <div class="param-ctl">
+    <input type="number" id="p-conc" name="max_concurrent_executions" value="{{ rt.max_concurrent_executions }}" min="{{ limits.max_concurrent_executions[0] }}" max="{{ limits.max_concurrent_executions[1] }}" required>
+    {% for v in [1, 2, 3, 5, 10] %}<button type="button" class="chip" onclick="document.getElementById('p-conc').value={{ v }}">{{ v }}</button>{% endfor %}
+   </div>
+   <div class="hint">Общий предел запусков через шлюз, выполняющихся в Qlik одновременно. Остальные ждут в очереди. В .env: {{ env.max_concurrent_executions }}</div></div>
+  <div class="param"><label>Интервал опроса Qlik, с</label>
+   <div class="param-ctl">
+    <input type="number" id="p-poll" name="poll_interval_seconds" value="{{ rt.poll_interval_seconds|int }}" min="{{ limits.poll_interval_seconds[0] }}" max="{{ limits.poll_interval_seconds[1] }}" required>
+    {% for v in [10, 20, 30, 60] %}<button type="button" class="chip" onclick="document.getElementById('p-poll').value={{ v }}">{{ v }}</button>{% endfor %}
+   </div>
+   <div class="hint">Как часто шлюз спрашивает Qlik о статусах — одним пакетным запросом на все активные запуски. Меньше — статусы свежее, больше — меньше нагрузка на Qlik. В .env: {{ env.poll_interval_seconds|int }}</div></div>
+ </div>
+ <div class="form-actions"><button class="primary">Сохранить</button>
+  {% if rt.overridden %}<button name="reset" value="1" onclick="return confirm('Вернуть значения из .env?')">Сбросить к .env</button><span class="muted small">сейчас действуют значения из UI</span>{% else %}<span class="muted small">сейчас действуют значения из .env</span>{% endif %}</div>
+</form>
+</div>
+
+<div class="card">
+<h2 style="margin-top:0">Пользователи UI</h2>
+<div class="table-wrap"><table><tr><th>Логин</th><th>Вход</th><th>Роль</th><th>Последний вход</th><th>Активен</th><th></th></tr>
+{% for u in users %}<tr><td>{{ u.username }}{% if u.display_name and u.display_name != u.username %}<div class="muted small">{{ u.display_name }}</div>{% endif %}</td>
+<td>{% if u.source == "ad" %}<span class="badge info">AD</span>{% else %}<span class="badge muted">локальный</span>{% endif %}</td>
+<td>{% if u.role == "admin" %}<span class="badge info">admin</span>{% else %}<span class="badge muted">{{ u.role }}</span>{% endif %}{% if u.role == "team" %}<div class="small">{% for cid in u.client_ids or [] %}{{ client_names.get(cid, "#" ~ cid) }}{% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}</td>
+<td class="small">{{ u.last_login_at|dt }}</td>
+<td>{{ "да" if u.enabled else "нет" }}</td>
+<td>{% if is_admin and u.username != admin %}<form class="inline" method="post" action="/ui/users/{{ u.id }}/toggle"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="sm">{{ "Отключить" if u.enabled else "Включить" }}</button></form>{% endif %}</td></tr>{% endfor %}
+</table></div>
+<p class="muted small">Вход через AD: {% if ldap_on %}<b>включён</b> ({{ ldap_url }}). Роль — при каждом входе:
+группа <span class="mono">{{ ldap_groups }}</span> + логин из списка админов (<span class="mono">{{ ldap_admin_users or "пусто" }}</span>) → <b>admin</b>;
+группа без логина в списке → <b>editor</b> (всё, кроме токенов и пользователей);
+группа команды с карточки клиента → <b>team</b> (только свой клиент);
+остальные пользователи AD → <b>{{ ldap_default_role if ldap_default_role != "none" else "нет доступа" }}</b>.
+Пользователь AD появляется здесь после первого входа.{% else %}<b>выключен</b> (задайте QGW_LDAP_URL в .env).{% endif %}
+Отключённый пользователь выходит из UI при следующем действии. Аварийная локальная учётка работает и без AD: <span class="mono">C:\qgw\manage.cmd create-admin &lt;логин&gt;</span></p>
+</div>
+{% endblock %}

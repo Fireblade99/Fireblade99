@@ -1,0 +1,317 @@
+from datetime import timedelta
+
+from sqlalchemy import select
+
+from qlik_gateway.db import session_scope
+from qlik_gateway.models import AuditLog, Client, Execution, QlikTask, utcnow
+from qlik_gateway.services.audit import audit_queue
+
+from .conftest import DISABLED, HR, RISK, SALES
+
+
+def _finish_all(mock):
+    for e in mock.executions.values():
+        e["start"] -= timedelta(seconds=10)
+
+
+def test_full_flow_start_poll_success(http, coordinator, make_client, mock):
+    _, h = make_client()
+    r = http.post(
+        f"/api/v1/tasks/{SALES}/start", headers={**h, "X-Airflow-Dag-Id": "dwh_daily", "X-Airflow-Run-Id": "r1"}
+    )
+    assert r.status_code == 202, r.text
+    eid = r.json()["execution_id"]
+    assert r.json()["status"] == "QUEUED"
+    assert mock.calls == [("GET", "/qrs/reloadtask/full")]  # the API itself never calls Qlik
+
+    coordinator.tick(force=True)
+    assert http.get(f"/api/v1/executions/{eid}", headers=h).json()["status"] in ("STARTING", "RUNNING")
+    _finish_all(mock)
+    coordinator.tick(force=True)
+    st = http.get(f"/api/v1/executions/{eid}", headers=h).json()
+    assert st["status"] == "SUCCESS" and st["terminal"] and st["success"]
+
+    d = http.get(f"/api/v1/executions/{eid}/details", headers=h).json()
+    assert d["initiator"]["dag_id"] == "dwh_daily" and d["node"]
+    assert http.get(f"/api/v1/executions/{eid}/log", headers=h).json()["log"]
+
+
+def test_failed_reload_reports_error(http, coordinator, make_client, mock):
+    _, h = make_client()
+    eid = http.post(f"/api/v1/tasks/{RISK}/start", headers=h).json()["execution_id"]
+    coordinator.tick(force=True)
+    _finish_all(mock)
+    coordinator.tick(force=True)
+    st = http.get(f"/api/v1/executions/{eid}", headers=h).json()
+    assert st["status"] == "FAILED" and "Connector connect error" in st["error"]
+    assert "Access denied for user" in st["error_detail"]  # the real reason from the script log
+
+
+def test_state_polling_does_not_hit_qlik(http, coordinator, make_client, mock):
+    _, h = make_client()
+    eid = http.post(f"/api/v1/tasks/{SALES}/start", headers=h).json()["execution_id"]
+    coordinator.tick(force=True)
+    before = len(mock.calls)
+    for _ in range(20):
+        http.get(f"/api/v1/executions/{eid}", headers=h)
+    assert len(mock.calls) == before
+
+
+def test_bulk_poll_one_request_for_many(http, coordinator, make_client, mock, settings):
+    settings.max_concurrent_executions = 10
+    _, h = make_client()
+    for t in (SALES, HR, RISK):
+        http.post(f"/api/v1/tasks/{t}/start", headers=h)
+    coordinator.tick(force=True)
+    mock.calls.clear()
+    coordinator.tick(force=True)
+    assert [c for c in mock.calls if "executionresult" in c[1]] == [("GET", "/qrs/executionresult/full")]
+
+
+def test_dedupe_attaches_to_running(http, coordinator, make_client, mock):
+    _, h1 = make_client("a")
+    _, h2 = make_client("b")
+    e1 = http.post(f"/api/v1/tasks/{SALES}/start", headers=h1).json()
+    e2 = http.post(f"/api/v1/tasks/{SALES}/start", headers=h2).json()
+    assert e2["execution_id"] == e1["execution_id"] and e2["deduplicated"]
+    coordinator.tick(force=True)
+    assert len([c for c in mock.calls if c[0] == "POST"]) == 1
+
+
+def test_auth_and_permissions(http, coordinator, make_client):
+    assert http.get("/api/v1/whoami").status_code == 401
+    assert http.get("/api/v1/whoami", headers={"Authorization": "Bearer qgw_x_y"}).status_code == 401
+    _, h = make_client("limited", tasks=(HR,), actions=("state",))
+    assert http.post(f"/api/v1/tasks/{HR}/start", headers=h).status_code == 403  # no start action
+    _, h2 = make_client("only-hr", tasks=(HR,))
+    assert http.post(f"/api/v1/tasks/{SALES}/start", headers=h2).status_code == 403  # foreign task
+    assert http.post(f"/api/v1/tasks/{DISABLED}/start", headers=h2).status_code == 403
+    assert [t["id"] for t in http.get("/api/v1/tasks", headers=h2).json()] == [HR]
+
+
+def test_blocking_revokes_immediately(http, coordinator, make_client):
+    cid, h = make_client()
+    assert http.get("/api/v1/whoami", headers=h).status_code == 200
+    with session_scope() as db:
+        c = db.get(Client, cid)
+        c.enabled = False
+        c.blocked_reason = "too many polls"
+    r = http.get("/api/v1/whoami", headers=h)
+    assert r.status_code == 403 and "too many polls" in r.json()["message"]
+
+
+def test_blocked_client_queue_is_cancelled_by_worker(http, coordinator, make_client, mock):
+    cid, h = make_client()
+    eid = http.post(f"/api/v1/tasks/{SALES}/start", headers=h).json()["execution_id"]
+    with session_scope() as db:
+        db.get(Client, cid).enabled = False
+    coordinator.tick(force=True)
+    with session_scope() as db:
+        assert db.get(Execution, eid).status == "CANCELLED"
+    assert not [c for c in mock.calls if c[0] == "POST"]
+
+
+def test_task_block_and_disabled(http, coordinator, make_client):
+    _, h = make_client()
+    with session_scope() as db:
+        db.get(QlikTask, SALES).blocked = True
+    assert http.post(f"/api/v1/tasks/{SALES}/start", headers=h).status_code == 423
+    assert http.post(f"/api/v1/tasks/{DISABLED}/start", headers=h).status_code == 409
+
+
+def test_rate_limit(http, coordinator, make_client):
+    _, h = make_client(requests_per_minute=3)
+    codes = [http.get("/api/v1/whoami", headers=h).status_code for _ in range(5)]
+    assert codes == [200, 200, 200, 429, 429]
+
+
+def test_starts_per_hour_limit(http, coordinator, make_client):
+    _, h = make_client(starts_per_hour=1)
+    assert http.post(f"/api/v1/tasks/{SALES}/start", headers=h).status_code == 202
+    assert http.post(f"/api/v1/tasks/{HR}/start", headers=h).status_code == 429
+
+
+def test_global_and_client_concurrency(http, coordinator, make_client, mock, settings):
+    settings.max_concurrent_executions = 1
+    _, h = make_client()
+    a = http.post(f"/api/v1/tasks/{SALES}/start", headers=h).json()["execution_id"]
+    b = http.post(f"/api/v1/tasks/{HR}/start", headers=h).json()["execution_id"]
+    coordinator.tick(force=True)
+    with session_scope() as db:
+        assert db.get(Execution, a).status != "QUEUED"
+        assert db.get(Execution, b).status == "QUEUED"
+    _finish_all(mock)
+    coordinator.tick(force=True)  # poll finishes a, dispatch happens before poll -> next tick starts b
+    coordinator.tick(force=True)
+    with session_scope() as db:
+        assert db.get(Execution, b).status != "QUEUED"
+
+
+def test_pause_dispatch(http, coordinator, make_client, mock):
+    from qlik_gateway.services.kv import DISPATCH_PAUSED, set_value
+
+    _, h = make_client()
+    eid = http.post(f"/api/v1/tasks/{SALES}/start", headers=h).json()["execution_id"]
+    with session_scope() as db:
+        set_value(db, DISPATCH_PAUSED, {"by": "admin", "reason": "incident"})
+    coordinator.tick(force=True)
+    with session_scope() as db:
+        assert db.get(Execution, eid).status == "QUEUED"
+        set_value(db, DISPATCH_PAUSED, None)
+    coordinator.tick(force=True)
+    with session_scope() as db:
+        assert db.get(Execution, eid).status != "QUEUED"
+
+
+def test_cancel_queued_and_stop_running(http, coordinator, make_client, mock):
+    _, h = make_client()
+    e1 = http.post(f"/api/v1/tasks/{SALES}/start", headers=h).json()["execution_id"]
+    assert http.post(f"/api/v1/executions/{e1}/cancel", headers=h).json()["status"] == "CANCELLED"
+    e2 = http.post(f"/api/v1/tasks/{HR}/start", headers=h).json()["execution_id"]
+    coordinator.tick(force=True)
+    http.post(f"/api/v1/executions/{e2}/cancel", headers=h)
+    assert ("POST", f"/qrs/task/{HR}/stop") in mock.calls
+    coordinator.tick(force=True)
+    assert http.get(f"/api/v1/executions/{e2}", headers=h).json()["status"] == "ABORTED"
+
+
+def test_audit_records_who_and_initiator(http, coordinator, make_client):
+    _, h = make_client("airflow-prod")
+    http.post(f"/api/v1/tasks/{SALES}/start", headers={**h, "X-Airflow-Dag-Id": "sales", "User-Agent": "airflow/2.9"})
+    http.get("/api/v1/whoami", headers={"Authorization": "Bearer bad"})
+    audit_queue.flush()
+    with session_scope() as db:
+        rows = db.scalars(select(AuditLog).where(AuditLog.actor_type == "client").order_by(AuditLog.id)).all()
+    start = rows[0]
+    assert start.actor == "airflow-prod" and start.action == "api.start" and start.task_id == SALES
+    assert start.meta["dag_id"] == "sales" and start.user_agent == "airflow/2.9" and start.execution_id
+    assert rows[1].actor == "anonymous" and rows[1].outcome == "denied"
+
+
+def test_lost_execution(http, coordinator, make_client, mock, settings):
+    _, h = make_client()
+    eid = http.post(f"/api/v1/tasks/{SALES}/start", headers=h).json()["execution_id"]
+    coordinator.tick(force=True)
+    mock.executions.clear()
+    with session_scope() as db:
+        db.get(Execution, eid).dispatched_at = utcnow() - timedelta(seconds=120)
+    coordinator.tick(force=True)
+    assert http.get(f"/api/v1/executions/{eid}", headers=h).json()["status"] == "LOST"
+
+
+def test_long_poll_returns_terminal(http, coordinator, make_client, mock):
+    _, h = make_client()
+    eid = http.post(f"/api/v1/tasks/{SALES}/start", headers=h).json()["execution_id"]
+    coordinator.tick(force=True)
+    _finish_all(mock)
+    coordinator.tick(force=True)
+    assert http.get(f"/api/v1/executions/{eid}?wait=30", headers=h).json()["status"] == "SUCCESS"
+
+
+def test_access_granted_via_qlik_custom_property(http, coordinator, make_client):
+    # mock: SALES has GatewayClient=airflow-dwh, HR has airflow-dwh and platform-ml
+    _, dwh = make_client("airflow-dwh", tasks=())
+    _, ml = make_client("platform-ml", tasks=())
+    assert http.post(f"/api/v1/tasks/{SALES}/start", headers=dwh).status_code == 202
+    assert http.post(f"/api/v1/tasks/{SALES}/start", headers=ml).status_code == 403
+    assert {t["id"] for t in http.get("/api/v1/tasks", headers=ml).json()} == {HR}
+    assert {t["id"] for t in http.get("/api/v1/tasks", headers=dwh).json()} == {SALES, HR}
+
+
+def test_json_declares_utf8(http, coordinator, make_client):
+    _, h = make_client()
+    r = http.get("/api/v1/whoami", headers=h)
+    assert r.headers["content-type"] == "application/json; charset=utf-8"
+    assert http.get("/api/v1/whoami").headers["content-type"] == "application/json; charset=utf-8"
+
+
+def test_other_clients_do_not_see_initiator(http, coordinator, make_client):
+    _, a = make_client("team-a")
+    _, b = make_client("team-b")
+    _, c = make_client("team-c", tasks=(HR,))
+    eid = http.post(f"/api/v1/tasks/{SALES}/start", headers={**a, "X-Airflow-Dag-Id": "secret_dag"}).json()[
+        "execution_id"
+    ]
+    mine = http.get(f"/api/v1/executions/{eid}/details", headers=a).json()
+    assert mine["own"] and mine["initiator"]["dag_id"] == "secret_dag" and mine["client"] == "team-a"
+    shared = http.get(f"/api/v1/executions/{eid}/details", headers=b).json()  # same task, other team
+    assert not shared["own"] and shared["initiator"] == {} and shared["client"] is None
+    assert http.get(f"/api/v1/executions/{eid}", headers=c).status_code == 404  # no access to the task
+    assert http.get("/api/v1/executions", headers=b).json() == []  # list shows own runs only
+
+
+def test_requests_collapse_while_queued_and_on_active_while_reloading(http, coordinator, make_client, mock):
+    mock.min_duration = mock.max_duration = 60
+    _, a = make_client("team-a")
+    _, b = make_client("team-b")
+    first = http.post(f"/api/v1/tasks/{SALES}/start", headers={**a, "X-Airflow-Dag-Id": "dag_a"}).json()
+    assert first["running_execution"] is None and first["url"].endswith(f"/ui/executions/{first['execution_id']}")
+    # 1. not reloading yet: every request, from any client and with any on_active, gets the same execution
+    for body in ({}, {"on_active": "reject"}, {"on_active": "queue"}, {"on_active": "reuse"}):
+        r = http.post(f"/api/v1/tasks/{SALES}/start", headers=b, json=body).json()
+        assert r["execution_id"] == first["execution_id"] and r["deduplicated"] and r["warnings"] == []
+    coordinator.tick(force=True)  # now reloading in Qlik
+
+    # 2. reject (default): 409 + reason + who/when/link of the active run
+    rej = http.post(f"/api/v1/tasks/{SALES}/start", headers=b)
+    assert rej.status_code == 409 and rej.json()["error"] == "already_running"
+    run = rej.json()["running_execution"]
+    assert (
+        run["execution_id"] == first["execution_id"]
+        and run["in_qlik"]
+        and run["url"].endswith(f"/ui/executions/{first['execution_id']}")
+    )
+    assert run["own"] is False and run["initiator"] == {}  # another client's DAG stays hidden
+
+    reuse = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"on_active": "reuse"}).json()
+    assert reuse["execution_id"] == first["execution_id"] and reuse["deduplicated"]
+    assert [w["code"] for w in reuse["warnings"]] == ["reused_active_run"]
+    assert reuse["running_execution"]["initiator"]["dag_id"] == "dag_a"  # own run: initiator visible
+
+    q1 = http.post(f"/api/v1/tasks/{SALES}/start", headers=b, json={"on_active": "queue"}).json()
+    assert q1["execution_id"] != first["execution_id"] and not q1["deduplicated"]
+    assert [w["code"] for w in q1["warnings"]] == ["queued_behind_active"]
+    # identical (queue) requests collapse into the queued run
+    q2 = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"on_active": "queue"}).json()
+    assert q2["execution_id"] == q1["execution_id"] and q2["deduplicated"]
+    # while the task is reloading, reject stays a conflict even with a queued run behind it
+    rej2 = http.post(f"/api/v1/tasks/{SALES}/start", headers=a)
+    assert rej2.status_code == 409 and rej2.json()["running_execution"]["execution_id"] == first["execution_id"]
+    assert rej2.json()["queued_execution"]["execution_id"] == q1["execution_id"]
+    # and reuse returns the reloading run, not the queued one
+    re2 = http.post(f"/api/v1/tasks/{SALES}/start", headers=b, json={"on_active": "reuse"}).json()
+    assert re2["execution_id"] == first["execution_id"]
+    assert http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"on_active": "nope"}).status_code == 422
+    # a run others are waiting for cannot be cancelled by one of them
+    c = http.post(f"/api/v1/executions/{q1['execution_id']}/cancel", headers=b)
+    assert c.status_code == 409 and c.json()["error"] == "shared_execution"
+
+
+def test_legacy_if_running_values(http, coordinator, make_client, mock):
+    mock.min_duration = mock.max_duration = 60
+    _, a = make_client("team-a")
+    first = http.post(f"/api/v1/tasks/{SALES}/start", headers=a).json()
+    coordinator.tick(force=True)
+    r = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"if_running": "attach"}).json()
+    assert r["execution_id"] == first["execution_id"] and r["on_active"] == "reuse"
+    assert http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"if_running": "skip"}).status_code == 409
+    r = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"dedupe": False}).json()
+    assert r["on_active"] == "queue" and r["execution_id"] != first["execution_id"]
+
+
+def test_admin_forced_on_active_on_task_and_client(http, coordinator, make_client, mock):
+    mock.min_duration = mock.max_duration = 60
+    cid, a = make_client("team-a")
+    _, b = make_client("team-b")
+    http.post(f"/api/v1/tasks/{SALES}/start", headers=b)
+    coordinator.tick(force=True)
+    with session_scope() as db:
+        db.get(Client, cid).if_running_policy = "reject"
+    r = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"on_active": "reuse"})
+    assert r.status_code == 409 and r.json()["policy_source"] == "client" and r.json()["on_active"] == "reject"
+
+    with session_scope() as db:
+        db.get(QlikTask, SALES).if_running_policy = "fresh"  # legacy value = queue; the task wins
+    r = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"on_active": "reuse"}).json()
+    assert not r["deduplicated"] and r["on_active"] == "queue" and r["policy_source"] == "task"
+    assert "policy_overridden" in [w["code"] for w in r["warnings"]]

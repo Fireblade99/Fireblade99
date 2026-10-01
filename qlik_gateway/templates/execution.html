@@ -1,0 +1,45 @@
+{% extends "base.html" %}{% block head %}{% if active %}<meta http-equiv="refresh" content="15">{% endif %}{% endblock %}
+{% block content %}
+<h1>Запуск #{{ ex.id }} <span class="badge {{ status_class(ex.status) }}">{{ ex.status }}</span></h1>
+<div class="row">
+<div class="card"><table>
+<tr><th>Задача</th><td>{{ ex.task_name }}<div class="mono muted">{{ ex.task_id }}</div></td></tr>
+{% if own %}<tr><th>Клиент</th><td><a href="/ui/clients/{{ ex.client_id }}">{{ ex.client.name }}</a> · IP {{ ex.caller_ip or "—" }}</td></tr>
+<tr><th>Инициатор</th><td>{% for k, v in ex.initiator.items() %}<div class="small"><span class="muted">{{ k }}:</span> {{ v }}</div>{% else %}—{% endfor %}</td></tr>
+{% else %}<tr><th>Клиент</th><td class="muted">запуск другой команды — ваш запрос присоединён к нему или получил отказ</td></tr>{% endif %}
+<tr><th>Приоритет</th><td>{{ ex.priority }}</td></tr>
+<tr><th>Присоединено запросов</th><td>{{ ex.dedup_hits }}{% if start_requests %} <a class="small" href="#requests">все запросы ({{ start_requests|length }})</a>{% endif %}</td></tr>
+</table></div>
+<div class="card"><table>
+<tr><th>Принят шлюзом</th><td>{{ ex.created_at|dt }}</td></tr>
+<tr><th>Отправлен в Qlik</th><td>{{ ex.dispatched_at|dt }} <span class="muted">(ждал {{ ex.wait_seconds|dur }})</span></td></tr>
+<tr><th>Старт / стоп в Qlik</th><td>{{ ex.qlik_started_at|dt }} → {{ ex.qlik_stopped_at|dt }}</td></tr>
+<tr><th>Длительность</th><td>{{ ex.duration_seconds|dur }}</td></tr>
+<tr><th>Нода</th><td>{{ ex.node or "—" }}</td></tr>
+<tr><th>Статус Qlik</th><td>{{ ex.qlik_status_text or "—" }} {% if ex.qlik_status_code is not none %}({{ ex.qlik_status_code }}){% endif %}</td></tr>
+<tr><th>Execution ID</th><td class="mono">{{ ex.qlik_execution_id or "—" }}</td></tr>
+<tr><th>Последний опрос</th><td>{{ ex.last_polled_at|dt }}</td></tr>
+</table></div></div>
+{% if ex.error %}<div class="flash bad"><b>Ошибка:</b> {{ ex.error }}{% if ex.error_detail and ex.error_detail != ex.error %}<pre style="margin:8px 0 0;background:transparent;border:0;padding:0">{{ ex.error_detail }}</pre>{% endif %}</div>{% endif %}
+<p>{% if active and can_cancel %}<form class="inline" method="post" action="/ui/executions/{{ ex.id }}/cancel" onsubmit="return confirm('Отменить / остановить?')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger">{% if ex.status == "QUEUED" %}Убрать из очереди{% else %}Остановить reload в Qlik{% endif %}</button></form>{% endif %}
+{% if ex.script_log_ref %}<a class="btn" href="/ui/executions/{{ ex.id }}/log">Лог скрипта</a>{% endif %}</p>
+<h2 id="requests">Запросы на этот запуск</h2>
+<div class="muted small" style="margin-bottom:6px">Все запросы на перезагрузку, которые пришли к этому запуску, от любых клиентов: кто создал запуск, кто к нему присоединился и кому отказали, пока он шёл в Qlik.</div>
+<div class="table-wrap"><table><tr><th>Время</th><th>Клиент</th><th>Инициатор</th><th>on_active</th><th>Итог</th><th>Подробности</th></tr>
+{% for a in start_requests %}{% set m = a.meta or {} %}{% set r = request_result(a) %}<tr>
+<td class="small nowrap">{{ a.ts|dt }}</td>
+<td>{% if a.client_id %}<a href="/ui/clients/{{ a.client_id }}">{{ a.actor }}</a>{% else %}{{ a.actor }}{% endif %}</td>
+<td class="small">{% for k, v in m.items() if k in ("dag_id","task_id","step","who","user","owner") %}<div><span class="muted">{{ k }}:</span> {{ v }}</div>{% else %}—{% endfor %}</td>
+<td class="small">{{ m.on_active or "—" }}{% if m.policy_source in ("task","client") %}<div class="muted">задано админом на {{ "задаче" if m.policy_source == "task" else "клиенте" }}{% if m.on_active_requested %}, просили {{ m.on_active_requested }}{% endif %}</div>{% elif m.policy_source == "default" %}<div class="muted">по умолчанию</div>{% endif %}</td>
+<td><span class="badge {{ r[1] }}">{{ r[0] }}</span></td>
+<td class="small">{{ r[2] }}</td>
+</tr>{% else %}<tr><td colspan="6" class="muted">Нет данных (запросы до версии 0.4.3 здесь не показываются)</td></tr>{% endfor %}
+</table></div>
+<h2>Сообщения Qlik</h2>
+<div class="table-wrap"><table><tr><th>Тип</th><th>Время</th><th>Сообщение</th></tr>
+{% for d in ex.details %}<tr><td>{{ d.type }}</td><td class="small">{{ d.at or "" }}</td><td>{{ d.message }}</td></tr>{% else %}<tr><td colspan="3" class="muted">—</td></tr>{% endfor %}</table></div>
+<h2>События</h2>
+<div class="table-wrap"><table><tr><th>Время</th><th>Кто</th><th>Действие</th><th>Результат</th><th>Сообщение</th></tr>
+{% for a in events %}<tr><td class="small">{{ a.ts|dt }}</td><td>{{ a.actor_type }}: {{ a.actor }}</td><td class="mono">{{ a.action }}</td><td><span class="badge {{ 'ok' if a.outcome == 'ok' else 'bad' }}">{{ a.outcome }}</span></td><td class="small">{{ a.message }}</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

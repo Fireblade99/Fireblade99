@@ -1,0 +1,28 @@
+<link rel="stylesheet" href="/static/vendor/flatpickr.min.css?v={{ app_version }}">
+<link rel="stylesheet" href="/static/vendor/flatpickr-dark.css?v={{ app_version }}" media="(prefers-color-scheme: dark)">
+<script src="/static/vendor/flatpickr.min.js?v={{ app_version }}"></script>
+<script src="/static/vendor/ru.js?v={{ app_version }}"></script>
+<script>
+document.querySelectorAll('.js-range').forEach(function (inp) {
+  var form = inp.form, from = form.elements.date_from, to = form.elements.date_to;
+  function label(v) {  // 2026-09-29T14:31 -> 29.09.2026 14:31
+    if (!v) return '';
+    var d = v.slice(8, 10) + '.' + v.slice(5, 7) + '.' + v.slice(0, 4);
+    return v.length > 10 ? d + ' ' + v.slice(11, 16) : d;
+  }
+  var fp = flatpickr(inp, {
+    mode: 'range', locale: 'ru', dateFormat: 'd.m.Y', maxDate: 'today',
+    defaultDate: [from.value, to.value].filter(Boolean).map(function (v) { return v.slice(0, 10); }),
+    onChange: function (sel, str, inst) {
+      from.value = sel[0] ? inst.formatDate(sel[0], 'Y-m-d') : '';
+      to.value = sel[1] ? inst.formatDate(sel[1], 'Y-m-d') : (sel[0] ? inst.formatDate(sel[0], 'Y-m-d') : '');
+      inp.value = label(from.value) + (to.value && to.value !== from.value ? ' — ' + label(to.value) : '');
+    }
+  });
+  // show exact values (presets carry a time), e.g. "29.09.2026 14:31 — сейчас"
+  if (from.value || to.value) inp.value = (label(from.value) || '…') + ' — ' + (label(to.value) || 'сейчас');
+  form.querySelector('.js-range-clear').addEventListener('click', function () {
+    fp.clear(); from.value = ''; to.value = ''; inp.value = '';
+  });
+});
+</script>
