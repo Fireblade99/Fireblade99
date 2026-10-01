@@ -4,8 +4,9 @@
 <div class="row">
 <div class="card"><table>
 <tr><th>Задача</th><td>{{ ex.task_name }}<div class="mono muted">{{ ex.task_id }}</div></td></tr>
-<tr><th>Клиент</th><td><a href="/ui/clients/{{ ex.client_id }}">{{ ex.client.name }}</a> · IP {{ ex.caller_ip or "—" }}</td></tr>
+{% if own %}<tr><th>Клиент</th><td><a href="/ui/clients/{{ ex.client_id }}">{{ ex.client.name }}</a> · IP {{ ex.caller_ip or "—" }}</td></tr>
 <tr><th>Инициатор</th><td>{% for k, v in ex.initiator.items() %}<div class="small"><span class="muted">{{ k }}:</span> {{ v }}</div>{% else %}—{% endfor %}</td></tr>
+{% else %}<tr><th>Клиент</th><td class="muted">запуск другой команды — ваш запрос присоединён к нему или получил отказ</td></tr>{% endif %}
 <tr><th>Приоритет</th><td>{{ ex.priority }}</td></tr>
 <tr><th>Присоединено запросов</th><td>{{ ex.dedup_hits }}{% if start_requests %} <a class="small" href="#requests">все запросы ({{ start_requests|length }})</a>{% endif %}</td></tr>
 </table></div>
@@ -20,7 +21,7 @@
 <tr><th>Последний опрос</th><td>{{ ex.last_polled_at|dt }}</td></tr>
 </table></div></div>
 {% if ex.error %}<div class="flash bad"><b>Ошибка:</b> {{ ex.error }}{% if ex.error_detail and ex.error_detail != ex.error %}<pre style="margin:8px 0 0;background:transparent;border:0;padding:0">{{ ex.error_detail }}</pre>{% endif %}</div>{% endif %}
-<p>{% if active and is_admin %}<form class="inline" method="post" action="/ui/executions/{{ ex.id }}/cancel" onsubmit="return confirm('Отменить / остановить?')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger">{% if ex.status == "QUEUED" %}Убрать из очереди{% else %}Остановить reload в Qlik{% endif %}</button></form>{% endif %}
+<p>{% if active and can_cancel %}<form class="inline" method="post" action="/ui/executions/{{ ex.id }}/cancel" onsubmit="return confirm('Отменить / остановить?')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger">{% if ex.status == "QUEUED" %}Убрать из очереди{% else %}Остановить reload в Qlik{% endif %}</button></form>{% endif %}
 {% if ex.script_log_ref %}<a class="btn" href="/ui/executions/{{ ex.id }}/log">Лог скрипта</a>{% endif %}</p>
 <h2 id="requests">Запросы на этот запуск</h2>
 <div class="muted small" style="margin-bottom:6px">Все запросы на перезагрузку, которые пришли к этому запуску, от любых клиентов: кто создал запуск, кто к нему присоединился и кому отказали, пока он шёл в Qlik.</div>

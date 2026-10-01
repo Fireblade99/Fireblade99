@@ -81,6 +81,8 @@ class Client(Base):
     priority: Mapped[int] = mapped_column(Integer, default=100)  # lower = dispatched first
     # set by an administrator: overrides the on_active the client asks for (None = the client decides)
     if_running_policy: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # AD groups whose members see this client in the UI (role "team")
+    ui_groups: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -212,11 +214,19 @@ class AdminUser(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str] = mapped_column(String(100), unique=True)
-    password_hash: Mapped[str] = mapped_column(String(300))
-    # "admin" - everything; "viewer" - read-only (monitoring, executions, tasks, audit)
+    password_hash: Mapped[str] = mapped_column(String(300), default="")
+    # "admin" - everything; "viewer" - read-only (monitoring, executions, tasks, audit);
+    # "team" - read-only and only what concerns its clients (AD login only)
     role: Mapped[str] = mapped_column(String(20), default="admin", server_default="admin")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # "local" - password stored here (the emergency admin); "ad" - recorded at the first AD login,
+    # the role is taken from AD groups at every login
+    source: Mapped[str] = mapped_column(String(10), default="local", server_default="local")
+    display_name: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # for role "team": the clients it sees (from AD groups at the last login)
+    client_ids: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
 
 
 class KV(Base):

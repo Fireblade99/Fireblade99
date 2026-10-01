@@ -53,6 +53,9 @@
 </div>
 <div class="muted small">0 = без ограничения</div>
 {% with policy=c.if_running_policy, empty_label="решает клиент в запросе (по умолчанию reject)", hint="Принудительное поведение для всех запросов этого клиента, если задача уже запущена. Настройка на задаче важнее этой." %}{% include "_on_active.html" %}{% endwith %}
+<label>AD-группы команды (видят этого клиента в UI)</label>
+<input type="text" name="ui_groups" value="{{ (c.ui_groups or [])|join(', ') }}" placeholder="QGW-Team-DWH">
+<div class="muted small">Участники этих групп AD входят в UI с ролью «команда» и видят только этого клиента: его запуски, задачи, ошибки и журнал. Через запятую.</div>
 <label>Токен действует до (пусто = бессрочно)</label>
 <input type="datetime-local" name="token_expires_at" value="{{ c.token_expires_at|dt_input }}">
 {% if is_admin %}<p><button class="primary">{% if is_new %}Создать и выдать токен{% else %}Сохранить{% endif %}</button></p>{% endif %}

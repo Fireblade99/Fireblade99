@@ -19,6 +19,19 @@ class Settings(BaseSettings):
     # Bootstrap admin, created on startup if no admins exist yet.
     bootstrap_admin_user: str | None = None
     bootstrap_admin_password: str | None = None
+
+    # --- UI login with Active Directory (empty ldap_url = local accounts only) ---
+    # ldaps://dc01.hq.local:636 (several, comma separated, are tried in turn)
+    ldap_url: str = ""
+    # NetBIOS domain: the user logs in as HQ\login (or just login); empty = the login is used as typed
+    ldap_domain: str = ""
+    ldap_base_dn: str = ""  # where users and groups are searched, e.g. DC=hq,DC=local
+    ldap_start_tls: bool = False  # for ldap:// on port 389
+    ldap_verify_ssl: str = "system"  # system (Windows store) / false / path to a CA .pem
+    ldap_timeout_seconds: int = 5
+    # AD groups (CN, comma separated) -> roles; team groups are set on each client's card in the UI
+    ldap_admin_groups: str = "QGW-Admins"
+    ldap_viewer_groups: str = "QGW-Viewers"
     # Time zone of the admin UI (display and date inputs), as a fixed offset from UTC in hours.
     # The database and the client API always use UTC.
     ui_utc_offset_hours: float = 5.0

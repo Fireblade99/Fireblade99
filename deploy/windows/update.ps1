@@ -25,10 +25,14 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 Start-Sleep -Seconds 2
 
 Write-Host "==> install code from $Src"
-$pip = @("-m", "pip", "install", "--force-reinstall", "--no-deps", "--disable-pip-version-check")
-if ($IndexUrl) { $pip += @("--index-url", $IndexUrl) }
-if ($TrustedHost) { $pip += @("--trusted-host", $TrustedHost) }
-& $py @pip $Src
+$idx = @()
+if ($IndexUrl) { $idx += @("--index-url", $IndexUrl) }
+if ($TrustedHost) { $idx += @("--trusted-host", $TrustedHost) }
+# 1. new dependencies of this version, if any (already installed ones are kept)
+& $py -m pip install --disable-pip-version-check @idx $Src
+if ($LASTEXITCODE) { throw "pip failed (check -IndexUrl / -TrustedHost)" }
+# 2. the gateway code itself, even if the version number did not change
+& $py -m pip install --force-reinstall --no-deps --disable-pip-version-check @idx $Src
 if ($LASTEXITCODE) { throw "pip failed (check -IndexUrl / -TrustedHost)" }
 
 Write-Host "==> start"

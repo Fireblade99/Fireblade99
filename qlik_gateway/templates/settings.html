@@ -43,9 +43,15 @@
 
 <div class="card">
 <h2 style="margin-top:0">Пользователи UI</h2>
-<div class="table-wrap"><table><tr><th>Логин</th><th>Роль</th><th>Активен</th><th>Создан</th></tr>
-{% for u in users %}<tr><td>{{ u.username }}</td><td>{% if u.role == "admin" %}<span class="badge info">admin</span>{% else %}<span class="badge muted">{{ u.role }}</span>{% endif %}</td><td>{{ "да" if u.enabled else "нет" }}</td><td class="small">{{ u.created_at|dt }}</td></tr>{% endfor %}
+<div class="table-wrap"><table><tr><th>Логин</th><th>Вход</th><th>Роль</th><th>Последний вход</th><th>Активен</th><th></th></tr>
+{% for u in users %}<tr><td>{{ u.username }}{% if u.display_name and u.display_name != u.username %}<div class="muted small">{{ u.display_name }}</div>{% endif %}</td>
+<td>{% if u.source == "ad" %}<span class="badge info">AD</span>{% else %}<span class="badge muted">локальный</span>{% endif %}</td>
+<td>{% if u.role == "admin" %}<span class="badge info">admin</span>{% else %}<span class="badge muted">{{ u.role }}</span>{% endif %}{% if u.role == "team" %}<div class="small">{% for cid in u.client_ids or [] %}{{ client_names.get(cid, "#" ~ cid) }}{% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}</td>
+<td class="small">{{ u.last_login_at|dt }}</td>
+<td>{{ "да" if u.enabled else "нет" }}</td>
+<td>{% if u.username != admin %}<form class="inline" method="post" action="/ui/users/{{ u.id }}/toggle"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="sm">{{ "Отключить" if u.enabled else "Включить" }}</button></form>{% endif %}</td></tr>{% endfor %}
 </table></div>
-<p class="muted small">admin — всё; viewer — только просмотр (мониторинг, запуски, задачи, журнал), без настроек, клиентов и блокировок. Создать пользователя: <span class="mono">C:\qgw\manage.cmd create-admin &lt;логин&gt; --role viewer</span></p>
+<p class="muted small">Вход через AD: {% if ldap_on %}<b>включён</b> ({{ ldap_url }}); роль берётся из групп при каждом входе: <span class="mono">{{ ldap_admin }}</span> → admin, <span class="mono">{{ ldap_viewer }}</span> → viewer, группы на карточке клиента → команда (видит только своего клиента). Пользователь AD появляется здесь после первого входа.{% else %}<b>выключен</b> (задайте QGW_LDAP_URL в .env).{% endif %}
+Отключённый пользователь выходит из UI при следующем действии. Аварийная локальная учётка работает и без AD: <span class="mono">C:\qgw\manage.cmd create-admin &lt;логин&gt;</span></p>
 </div>
 {% endblock %}

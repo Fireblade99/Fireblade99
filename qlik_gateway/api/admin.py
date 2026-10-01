@@ -29,7 +29,7 @@ from ..models import (
 from ..qlik import QlikError
 from ..security import generate_client_token, verify_password
 from ..services import executions as svc
-from ..services import runtime
+from ..services import ldap_auth, runtime
 from ..services.audit import audit
 from ..services.errors import ServiceError
 from ..services.kv import DISPATCH_PAUSED, dispatch_paused, set_value
@@ -132,15 +132,46 @@ class NotLoggedIn(Exception):
     pass
 
 
-def admin_user(request: Request) -> str:
+def admin_user(request: Request, db: Session = Depends(get_db)) -> str:
     user = request.session.get("admin")
     if not user or not request.session.get("role"):  # sessions from before roles existed: log in again
+        raise NotLoggedIn()
+    # a user disabled by an administrator is logged out at the next click, not when the session expires
+    rec = db.scalars(select(AdminUser).where(AdminUser.username == user)).first()
+    if rec is None or not rec.enabled:
+        request.session.clear()
         raise NotLoggedIn()
     return user
 
 
 def is_admin(request: Request) -> bool:
     return request.session.get("role") == "admin"
+
+
+def scope(request: Request) -> set[int] | None:
+    """Clients the user may see: None = all (admin, viewer); a set for role "team"."""
+    if request.session.get("role") == "team":
+        return set(request.session.get("clients") or [])
+    return None
+
+
+def exec_conds(request: Request) -> list:
+    sc = scope(request)
+    return [] if sc is None else [Execution.client_id.in_(sc or [-1])]
+
+
+def can_see_execution(request: Request, db: Session, ex: Execution) -> bool:
+    """A team sees its own runs and runs its requests collapsed into / were refused by."""
+    sc = scope(request)
+    if sc is None or ex.client_id in sc:
+        return True
+    return bool(
+        db.scalar(
+            select(func.count(AuditLog.id)).where(
+                AuditLog.execution_id == ex.id, AuditLog.action == "api.start", AuditLog.client_id.in_(sc or [-1])
+            )
+        )
+    )
 
 
 def require_admin(request: Request, user: str = Depends(admin_user)) -> str:
@@ -169,6 +200,7 @@ def render(request: Request, name: str, **ctx) -> HTMLResponse:
     ctx.setdefault("admin", request.session.get("admin"))
     ctx["is_admin"] = is_admin(request)
     ctx["role"] = request.session.get("role")
+    ctx["display"] = request.session.get("display")
     ctx["csrf"] = csrf_token(request)
     ctx["flash"] = request.session.pop("flash", None)
     return templates.TemplateResponse(request, name, ctx)
@@ -218,23 +250,72 @@ def login(
     next: str = Form(""),
     db: Session = Depends(get_db),
 ):
-    user = db.scalars(select(AdminUser).where(AdminUser.username == username)).first()
-    ok = user is not None and user.enabled and verify_password(password, user.password_hash)
-    audit(
-        db,
-        actor_type="admin",
-        actor=username,
-        action="admin.login",
-        outcome="ok" if ok else "denied",
-        ip=client_ip(request),
-        user_agent=(request.headers.get("user-agent") or "")[:500],
-    )
-    if not ok:
-        flash(request, "Неверный логин или пароль", "bad")
-        return back("/ui/login?" + urlencode({"next": safe_next(next)}))
+    settings = get_settings()
+    retry = back("/ui/login?" + urlencode({"next": safe_next(next)}))
+
+    def done(outcome: str, msg: str = "", message: str = "", **meta):
+        audit(
+            db,
+            actor_type="admin",
+            actor=username,
+            action="admin.login",
+            outcome=outcome,
+            ip=client_ip(request),
+            user_agent=(request.headers.get("user-agent") or "")[:500],
+            message=message,
+            meta=meta,
+        )
+        if msg:
+            flash(request, msg, "bad")
+
+    # 1. a local account (the emergency admin): checked first, works when AD is down
+    local = db.scalars(select(AdminUser).where(AdminUser.username == username.strip())).first()
+    if local is not None and local.source == "local" and local.password_hash:
+        if not (local.enabled and verify_password(password, local.password_hash)):
+            done("denied", "Неверный логин или пароль")
+            return retry
+        user, role, clients = local, local.role or "admin", list(local.client_ids or [])
+    # 2. Active Directory
+    elif ldap_auth.enabled(settings):
+        try:
+            found = ldap_auth.authenticate(settings, username, password)
+        except ldap_auth.LdapUnavailable as e:
+            done("error", "AD недоступен — войдите аварийной локальной учётной записью", message=str(e)[:500])
+            return retry
+        except ImportError:
+            done("error", "Вход через AD не установлен (нет модуля ldap3): обновите шлюз через update.ps1")
+            return retry
+        if found is None:
+            done("denied", "Неверный логин или пароль")
+            return retry
+        role, clients = ldap_auth.resolve_role(settings, found.groups, db.scalars(select(Client)).all())
+        if role is None:
+            done(
+                "denied",
+                "Нет доступа: учётная запись не входит ни в одну группу шлюза. Обратитесь к администратору.",
+                message="no gateway group",
+                groups=found.groups[:50],
+            )
+            return retry
+        user = db.scalars(select(AdminUser).where(AdminUser.username == found.username)).first()
+        if user is not None and (user.source != "ad" or not user.enabled):
+            done("denied", "Учётная запись отключена администратором шлюза")
+            return retry
+        if user is None:
+            user = AdminUser(username=found.username, password_hash="", source="ad")
+            db.add(user)
+        user.role, user.display_name, user.client_ids = role, found.display_name, clients
+    else:
+        done("denied", "Неверный логин или пароль")
+        return retry
+
+    user.last_login_at = utcnow()
+    done("ok", source=user.source, role=role, clients=clients)
     request.session.clear()
-    request.session["admin"] = username
-    request.session["role"] = user.role or "admin"
+    request.session["admin"] = user.username
+    request.session["role"] = role
+    request.session["clients"] = clients
+    request.session["display"] = user.display_name or user.username
     return back(safe_next(next))
 
 
@@ -250,18 +331,20 @@ def logout(request: Request):
 @router.get("/")
 def dashboard(request: Request, user: str = Depends(admin_user), db: Session = Depends(get_db)):
     now = utcnow()
+    sc = scope(request)
+    ec = exec_conds(request)
     day = now - timedelta(hours=24)
     hour = now - timedelta(hours=1)
 
     by_status = dict(
         db.execute(
             select(Execution.status, func.count(Execution.id))
-            .where((Execution.created_at >= day) | Execution.status.in_(ExecStatus.ACTIVE))
+            .where((Execution.created_at >= day) | Execution.status.in_(ExecStatus.ACTIVE), *ec)
             .group_by(Execution.status)
         ).all()
     )
     active = db.scalars(
-        select(Execution).where(Execution.status.in_(ExecStatus.ACTIVE)).order_by(Execution.status, Execution.id)
+        select(Execution).where(Execution.status.in_(ExecStatus.ACTIVE), *ec).order_by(Execution.status, Execution.id)
     ).all()
 
     fail_expr = func.sum(case((Execution.status.not_in([ExecStatus.SUCCESS, *ExecStatus.ACTIVE]), 1), else_=0))
@@ -276,7 +359,7 @@ def dashboard(request: Request, user: str = Depends(admin_user), db: Session = D
                 fail_expr.label("fails"),
                 func.sum(Execution.dedup_hits).label("dedup"),
             )
-            .where(Execution.created_at >= day)
+            .where(Execution.created_at >= day, *ec)
             .group_by(Execution.client_id)
         )
     }
@@ -292,7 +375,7 @@ def dashboard(request: Request, user: str = Depends(admin_user), db: Session = D
             .group_by(AuditLog.client_id)
         )
     }
-    clients = db.scalars(select(Client).order_by(Client.name)).all()
+    clients = [c for c in db.scalars(select(Client).order_by(Client.name)) if sc is None or c.id in sc]
     load = []
     for c in clients:
         s, k = starts.get(c.id), calls.get(c.id)
@@ -316,14 +399,14 @@ def dashboard(request: Request, user: str = Depends(admin_user), db: Session = D
             func.count(Execution.id).label("runs"),
             fail_expr.label("fails"),
         )
-        .where(Execution.created_at >= day)
+        .where(Execution.created_at >= day, *ec)
         .group_by(Execution.task_id, Execution.task_name)
         .order_by(func.count(Execution.id).desc())
         .limit(10)
     ).all()
     durations: dict[str, list[float]] = {}
     per_node: dict[str, dict] = {}
-    for ex in db.scalars(select(Execution).where(Execution.created_at >= day, Execution.node.is_not(None))):
+    for ex in db.scalars(select(Execution).where(Execution.created_at >= day, Execution.node.is_not(None), *ec)):
         n = per_node.setdefault(ex.node, {"runs": 0, "ok": 0, "fails": 0, "busy": 0.0, "running": 0})
         n["runs"] += 1
         if ex.status == ExecStatus.SUCCESS:
@@ -385,8 +468,25 @@ def settings_page(request: Request, user: str = Depends(require_admin), db: Sess
             "poll_interval_seconds": s.poll_interval_seconds,
         },
         limits=runtime.LIMITS,
-        users=db.scalars(select(AdminUser).order_by(AdminUser.username)).all(),
+        users=db.scalars(select(AdminUser).order_by(AdminUser.source, AdminUser.username)).all(),
+        client_names={c.id: c.name for c in db.scalars(select(Client))},
+        ldap_on=ldap_auth.enabled(s),
+        ldap_url=s.ldap_url,
+        ldap_admin=s.ldap_admin_groups,
+        ldap_viewer=s.ldap_viewer_groups,
     )
+
+
+@router.post("/users/{user_id}/toggle", dependencies=[Depends(check_csrf)])
+def user_toggle(user_id: int, request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)):
+    u = db.get(AdminUser, user_id) or _404()
+    if u.username == user:
+        flash(request, "Нельзя отключить самого себя", "bad")
+        return back("/ui/settings")
+    u.enabled = not u.enabled
+    admin_audit(db, request, "user.enable" if u.enabled else "user.disable", meta={"username": u.username})
+    flash(request, f"Пользователь {u.username} {'включён' if u.enabled else 'отключён'}")
+    return back("/ui/settings")
 
 
 @router.post("/dispatch", dependencies=[Depends(check_csrf)])
@@ -456,7 +556,9 @@ def _parse_list(raw: str) -> list[str]:
 
 @router.get("/clients")
 def clients_page(request: Request, user: str = Depends(admin_user), db: Session = Depends(get_db)):
-    return render(request, "clients.html", clients=db.scalars(select(Client).order_by(Client.name)).all())
+    sc = scope(request)
+    clients = [c for c in db.scalars(select(Client).order_by(Client.name)) if sc is None or c.id in sc]
+    return render(request, "clients.html", clients=clients)
 
 
 @router.get("/clients/new")
@@ -509,6 +611,7 @@ def _apply_client_form(c: Client, form) -> None:
     c.max_concurrent = int(form.get("max_concurrent") or 0)
     c.priority = int(form.get("priority") or 100)
     c.if_running_policy = _policy(form.get("if_running_policy"))
+    c.ui_groups = _parse_list(str(form.get("ui_groups", "")))
     exp = str(form.get("token_expires_at", "")).strip()
     c.token_expires_at = from_local(datetime.fromisoformat(exp)) if exp else None
 
@@ -533,6 +636,8 @@ async def client_create(request: Request, user: str = Depends(require_admin), db
 @router.get("/clients/{client_id}")
 def client_edit_page(client_id: int, request: Request, user: str = Depends(admin_user), db: Session = Depends(get_db)):
     c = db.get(Client, client_id) or _404()
+    if (sc := scope(request)) is not None and client_id not in sc:
+        _404()
     new_token = request.session.pop("new_token", None)
     if new_token and new_token.get("client_id") != client_id:
         new_token = None
@@ -577,6 +682,7 @@ def _client_snapshot(c: Client) -> dict:
         "conc": c.max_concurrent,
         "prio": c.priority,
         "on_active": c.if_running_policy,
+        "ui_groups": c.ui_groups,
     }
 
 
@@ -652,8 +758,11 @@ def tasks_page(request: Request, user: str = Depends(admin_user), db: Session = 
             ).group_by(Execution.task_id)
         )
     }
-    clients = db.scalars(select(Client)).all()
+    sc = scope(request)
+    clients = [c for c in db.scalars(select(Client)) if sc is None or c.id in sc]
     users = {t.id: [c.name for c in clients if svc.client_can_task(c, t.id, t)] for t in tasks}
+    if sc is not None:  # a team sees only the tasks its clients may start
+        tasks = [t for t in tasks if users[t.id]]
     return render(request, "tasks.html", tasks=tasks, last=last, users=users)
 
 
@@ -735,7 +844,7 @@ def executions_page(
     user: str = Depends(admin_user),
     db: Session = Depends(get_db),
 ):
-    conds = []
+    conds = exec_conds(request)
     if client_id.isdigit():
         conds.append(Execution.client_id == int(client_id))
     if status:
@@ -764,7 +873,11 @@ def executions_page(
     return render(
         request,
         "executions.html",
-        clients=db.scalars(select(Client).order_by(Client.name)).all(),
+        clients=[
+            c
+            for c in db.scalars(select(Client).order_by(Client.name))
+            if scope(request) is None or c.id in scope(request)
+        ],
         statuses=[*ExecStatus.ACTIVE, *ExecStatus.TERMINAL],
         **page_ctx,
     )
@@ -822,17 +935,32 @@ def _paginate(db: Session, model, conds: list, f: dict, page: int, per_page: int
 @router.get("/executions/{execution_id}")
 def execution_page(execution_id: int, request: Request, user: str = Depends(admin_user), db: Session = Depends(get_db)):
     ex = db.get(Execution, execution_id) or _404()
+    if not can_see_execution(request, db, ex):
+        _404()
+    sc = scope(request)
     events = db.scalars(select(AuditLog).where(AuditLog.execution_id == execution_id).order_by(AuditLog.id)).all()
+    if sc is not None:  # a team does not see what other teams' clients did
+        events = [a for a in events if a.actor_type != "client" or a.client_id in sc]
     # every start request that ended up on this run: created it, joined it, got it (reuse) or was refused by it
     start_requests = [a for a in events if a.action == "api.start"]
     return render(
         request,
         "execution.html",
         ex=ex,
+        own=sc is None or ex.client_id in sc,
         events=[a for a in events if a.action != "api.start"],
         start_requests=start_requests,
         active=ex.status in ExecStatus.ACTIVE,
+        can_cancel=_can_cancel(request, ex),
     )
+
+
+def _can_cancel(request: Request, ex: Execution) -> bool:
+    """Admin: any run. Team: its own run that no other request is waiting for."""
+    if is_admin(request):
+        return True
+    sc = scope(request)
+    return sc is not None and ex.client_id in sc and not ex.dedup_hits
 
 
 @router.get("/executions/{execution_id}/log")
@@ -844,6 +972,8 @@ def execution_log_page(
     backend=Depends(get_backend),
 ):
     ex = db.get(Execution, execution_id) or _404()
+    if not can_see_execution(request, db, ex):
+        _404()
     if not ex.script_log_ref:
         text = "Лог скрипта недоступен"
     else:
@@ -859,11 +989,15 @@ def execution_log_page(
 def execution_cancel(
     execution_id: int,
     request: Request,
-    user: str = Depends(require_admin),
+    user: str = Depends(admin_user),
     db: Session = Depends(get_db),
     backend=Depends(get_backend),
 ):
     ex = db.get(Execution, execution_id) or _404()
+    if not _can_cancel(request, ex):
+        raise HTTPException(
+            403, "Недостаточно прав: отменить можно только свой запуск, к которому никто не присоединился"
+        )
     try:
         svc.cancel(db, backend, ex, actor_type="admin", actor=user)
         flash(request, "Отмена отправлена")
@@ -891,7 +1025,8 @@ def audit_page(
     user: str = Depends(admin_user),
     db: Session = Depends(get_db),
 ):
-    conds = []
+    sc = scope(request)
+    conds = [] if sc is None else [AuditLog.client_id.in_(sc or [-1])]  # a team: only its clients' calls
     if actor_type:
         conds.append(AuditLog.actor_type == actor_type)
     if actor:

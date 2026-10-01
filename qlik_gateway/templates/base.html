@@ -5,7 +5,7 @@
 {% if admin %}
 <header><span class="brand">Qlik Gateway</span>
 <nav><a href="/ui/">Мониторинг</a><a href="/ui/executions">Запуски</a><a href="/ui/clients">Клиенты</a><a href="/ui/tasks">Задачи Qlik</a><a href="/ui/audit">Журнал</a>{% if is_admin %}<a href="/ui/settings">Настройки</a>{% endif %}<a href="/docs">API</a></nav>
-<span class="me" title="Все даты и время в интерфейсе — {{ tz_label() }}">{{ admin }}{% if not is_admin %} <span class="badge muted">просмотр</span>{% endif %}<form class="inline" method="post" action="/ui/logout"><button>Выйти</button></form></span></header>
+<span class="me" title="Все даты и время в интерфейсе — {{ tz_label() }}">{{ display or admin }}{% if role == "viewer" %} <span class="badge muted">просмотр</span>{% elif role == "team" %} <span class="badge muted">команда</span>{% endif %}<form class="inline" method="post" action="/ui/logout"><button>Выйти</button></form></span></header>
 {% endif %}
 <main>
 {% if flash %}<div class="flash {{ flash.kind }}">{{ flash.msg }}</div>{% endif %}
