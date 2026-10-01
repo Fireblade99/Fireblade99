@@ -126,6 +126,13 @@ groups:
       # ===============================================================
       # ТРАНЗАКЦИИ
       #
+      # usename и application_name в by не для красоты: это максимум
+      # того, что экспортёр знает о владельце транзакции. Ни pid, ни
+      # текста запроса в метриках нет и быть не может — pg_stat_activity
+      # приезжает уже свёрнутым в агрегат. Поэтому алерт отвечает на
+      # вопрос "чьё", а "что именно" смотрится запросом из шаблона
+      # уведомления.
+      #
       # Два правила намеренно разведены по состоянию сессии, чтобы одна
       # проблема не давала два уведомления и чтобы имя алерта сразу
       # говорило, что чинить:
@@ -137,14 +144,14 @@ groups:
 
       - alert: ЗависшаяIdleInTransaction
         expr: |
-          max by (pg_group, pg_instance, datname) (
+          max by (pg_group, pg_instance, datname, usename, application_name) (
             pg_stat_activity_max_tx_duration{pg_group="ГРУППА",state=~"idle in transaction.*"}
           ) > 120
         for: 1m
         labels:
           severity: warning
         annotations:
-          summary: "idle in transaction на {{ $labels.pg_instance }} ({{ $labels.datname }}) держится {{ $value | humanizeDuration }}"
+          summary: "idle in transaction на {{ $labels.pg_instance }} ({{ $labels.datname }}) держится {{ $value | humanizeDuration }} — {{ $labels.usename }} / {{ $labels.application_name }}"
           description: >-
             Сессия открыла транзакцию и ничего не делает. Пока она жива,
             автовакуум не может убрать мёртвые строки ПО ВСЕЙ базе, а не
@@ -161,14 +168,14 @@ groups:
       # хост не попал под два правила сразу. Пример — в комплекте prod-dp.
       - alert: ДолгаяТранзакция
         expr: |
-          max by (pg_group, pg_instance, datname) (
+          max by (pg_group, pg_instance, datname, usename, application_name) (
             pg_stat_activity_max_tx_duration{pg_group="ГРУППА",state!~"idle.*"}
           ) > 3600
         for: 1m
         labels:
           severity: warning
         annotations:
-          summary: "Запрос на {{ $labels.pg_instance }} ({{ $labels.datname }}) выполняется {{ $value | humanizeDuration }}"
+          summary: "Запрос на {{ $labels.pg_instance }} ({{ $labels.datname }}) выполняется {{ $value | humanizeDuration }} — {{ $labels.usename }} / {{ $labels.application_name }}"
           description: >-
             Активная транзакция живёт больше часа. Последствия те же, что
             у idle in transaction — заблокированный автовакуум по всей
