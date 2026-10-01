@@ -126,6 +126,15 @@ groups:
       # ===============================================================
       # ТРАНЗАКЦИИ
       #
+      # backend_type="client backend" отсекает фоновые процессы самой
+      # базы. Без него правило ловит autovacuum worker: он держит
+      # открытую транзакцию столько, сколько чистит таблицу, usename у
+      # него пустой (фоновым процессам пользователь не присвоен), и в
+      # уведомлении получается "[no value] / [no value]". Уборка это не
+      # зависшая транзакция, и будить по ней никого не надо. Застрявший
+      # автовакуум — отдельная история, под неё у экспортёра есть
+      # выключенный по умолчанию --collector.stat_activity_autovacuum.
+      #
       # usename и application_name в by не для красоты: это максимум
       # того, что экспортёр знает о владельце транзакции. Ни pid, ни
       # текста запроса в метриках нет и быть не может — pg_stat_activity
@@ -145,7 +154,7 @@ groups:
       - alert: ЗависшаяIdleInTransaction
         expr: |
           max by (pg_group, pg_instance, datname, usename, application_name) (
-            pg_stat_activity_max_tx_duration{pg_group="prod-dp",state=~"idle in transaction.*"}
+            pg_stat_activity_max_tx_duration{pg_group="prod-dp",state=~"idle in transaction.*",backend_type="client backend"}
           ) > 120
         for: 1m
         labels:
@@ -178,7 +187,7 @@ groups:
       - alert: ДолгаяТранзакцияDbp2
         expr: |
           max by (pg_group, pg_instance, datname, usename, application_name) (
-            pg_stat_activity_max_tx_duration{pg_group="prod-dp",pg_instance="dwh-dbp2-lp2",state!~"idle.*"}
+            pg_stat_activity_max_tx_duration{pg_group="prod-dp",pg_instance="dwh-dbp2-lp2",state!~"idle.*",backend_type="client backend"}
           ) > 60
         for: 1m
         labels:
@@ -186,17 +195,15 @@ groups:
         annotations:
           summary: "Запрос на {{ $labels.pg_instance }} ({{ $labels.datname }}) выполняется {{ $value | humanizeDuration }} — {{ $labels.usename }} / {{ $labels.application_name }}"
           description: >-
-            Порог для этого хоста — 1 минута: здесь запрос, живущий
-            дольше, сам по себе считается ненормальным.
-            Найти: SELECT pid, usename, application_name, state,
-            now() - xact_start AS tx_age, wait_event_type, wait_event,
-            left(query,300) FROM pg_stat_activity
-            WHERE xact_start IS NOT NULL ORDER BY xact_start;
+            Порог для этого хоста — 1 минута: здесь запрос клиента,
+            живущий дольше, сам по себе считается ненормальным. Фоновые
+            процессы базы отсечены, иначе сюда попадал бы автовакуум.
+            Найти: SELECT pid, usename, application_name, state, now() - xact_start AS tx_age, wait_event_type, wait_event, left(query,300) FROM pg_stat_activity WHERE xact_start IS NOT NULL ORDER BY xact_start;
 
       - alert: ДолгаяТранзакция
         expr: |
           max by (pg_group, pg_instance, datname, usename, application_name) (
-            pg_stat_activity_max_tx_duration{pg_group="prod-dp",pg_instance!~"dwh-dbp2-lp2",state!~"idle.*"}
+            pg_stat_activity_max_tx_duration{pg_group="prod-dp",pg_instance!~"dwh-dbp2-lp2",state!~"idle.*",backend_type="client backend"}
           ) > 3600
         for: 1m
         labels:
@@ -204,13 +211,10 @@ groups:
         annotations:
           summary: "Запрос на {{ $labels.pg_instance }} ({{ $labels.datname }}) выполняется {{ $value | humanizeDuration }} — {{ $labels.usename }} / {{ $labels.application_name }}"
           description: >-
-            Активная транзакция живёт больше часа. Последствия те же, что
-            у idle in transaction — заблокированный автовакуум по всей
-            базе, — но причина другая: это работающий запрос.
-            Найти: SELECT pid, usename, application_name, state,
-            now() - xact_start AS tx_age, wait_event_type, wait_event,
-            left(query,300) FROM pg_stat_activity
-            WHERE xact_start IS NOT NULL ORDER BY xact_start;
+            Активная транзакция клиента живёт больше часа. Последствия те
+            же, что у idle in transaction — заблокированный автовакуум по
+            всей базе, — но причина другая: это работающий запрос.
+            Найти: SELECT pid, usename, application_name, state, now() - xact_start AS tx_age, wait_event_type, wait_event, left(query,300) FROM pg_stat_activity WHERE xact_start IS NOT NULL ORDER BY xact_start;
 
       # ===============================================================
       # БЛОКИРОВКИ
