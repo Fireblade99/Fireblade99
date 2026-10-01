@@ -10,7 +10,7 @@
   <span class="badge ok">Запуск в Qlik активен</span>
 {% endif %}
   <span class="small muted">одновременных reload: {{ rt.max_concurrent_executions }} · опрос Qlik раз в {{ rt.poll_interval_seconds|int }} с одним запросом</span>
-  {% if is_admin %}<a class="small" href="/ui/settings">настройки →</a>{% endif %}
+  {% if can_edit %}<a class="small" href="/ui/settings">настройки →</a>{% endif %}
 </div>
 
 <div class="grid">

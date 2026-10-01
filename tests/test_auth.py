@@ -12,16 +12,17 @@ from qlik_gateway.services.audit import audit_queue
 from .conftest import HR, SALES
 
 AD = {  # login -> (password, groups)
-    "ivanov": ("pw", ["QGW-Admins"]),
-    "petrov": ("pw", ["Domain Users", "QGW-Viewers"]),
-    "sidorov": ("pw", ["QGW-Team-DWH"]),
-    "nobody": ("pw", ["Domain Users"]),
+    "ivanov": ("pw", ["QGW-Admins"]),  # in the group and in the admin list -> admin
+    "kuznetsov": ("pw", ["QGW-Admins"]),  # in the group only -> editor
+    "petrov": ("pw", ["Domain Users"]),  # no gateway group -> viewer
+    "sidorov": ("pw", ["QGW-Team-DWH"]),  # a team group -> team
 }
 
 
 @pytest.fixture
 def ad(monkeypatch, settings):
     settings.ldap_url = "ldaps://dc01.test:636"
+    settings.ldap_admin_users = "Ivanov, someone"
     state = {"down": False}
 
     def fake(_settings, login, password):
@@ -49,10 +50,22 @@ def test_split_login_and_roles(settings):
     assert ldap_auth.split_login("HQ\\Ivanov") == ldap_auth.split_login("ivanov@hq.local") == "ivanov"
     dwh = Client(id=1, name="dwh", ui_groups=["QGW-Team-DWH"])
     ml = Client(id=2, name="ml", ui_groups=["qgw-team-ml", "QGW-Team-DWH"])
-    assert ldap_auth.resolve_role(settings, ["qgw-admins"], [dwh]) == ("admin", [])
-    assert ldap_auth.resolve_role(settings, ["QGW-Viewers", "QGW-Team-DWH"], [dwh]) == ("viewer", [])
-    assert ldap_auth.resolve_role(settings, ["QGW-Team-DWH"], [dwh, ml]) == ("team", [1, 2])
-    assert ldap_auth.resolve_role(settings, ["Domain Users"], [dwh, ml]) == (None, [])
+    settings.ldap_admin_users = "ivanov"
+    role = ldap_auth.resolve_role
+    assert role(settings, "Ivanov", ["qgw-admins"], [dwh]) == ("admin", [])  # group + listed login
+    assert role(settings, "petrov", ["QGW-Admins", "QGW-Team-DWH"], [dwh]) == ("editor", [])  # group only
+    assert role(settings, "ivanov", ["Domain Users"], [dwh]) == ("viewer", [])  # listed, but no group
+    assert role(settings, "sidorov", ["QGW-Team-DWH"], [dwh, ml]) == ("team", [1, 2])
+    assert role(settings, "x", ["Domain Users"], [dwh, ml]) == ("viewer", [])
+    settings.ldap_default_role = "none"
+    assert role(settings, "x", ["Domain Users"], [dwh, ml]) == (None, [])
+
+
+def test_no_access_for_others_when_default_role_is_none(http, ad, settings):
+    settings.ldap_default_role = "none"
+    r = login(http, "petrov", "pw")
+    assert r.headers["location"].startswith("/ui/login")
+    assert "ни в одну группу шлюза" in http.get(r.headers["location"]).text
 
 
 def test_ad_login_roles_and_denials(http, ad):
@@ -64,16 +77,22 @@ def test_ad_login_roles_and_denials(http, ad):
         assert u.source == "ad" and u.role == "admin" and u.password_hash == "" and u.last_login_at
 
     http.post("/ui/logout", data={})
+    login(http, "kuznetsov", "pw")  # editor: settings and clients yes, tokens and users no
+    assert http.get("/ui/settings").status_code == 200 and "редактор" in http.get("/ui/").text
+    assert http.get("/ui/clients/new").status_code == 403
+    with session_scope() as db:
+        uid = db.query(AdminUser).filter_by(username="ivanov").one().id
+    csrf = re.search(r'name="csrf" value="([^"]+)"', http.get("/ui/settings").text).group(1)
+    assert http.post(f"/ui/users/{uid}/toggle", data={"csrf": csrf}).status_code == 403
+
+    http.post("/ui/logout", data={})
     login(http, "petrov", "pw")
-    assert http.get("/ui/settings").status_code == 403  # viewer
+    assert http.get("/ui/settings").status_code == 403  # viewer: no gateway group
 
     http.cookies.clear()
     assert login(http, "ivanov", "wrong").headers["location"].startswith("/ui/login")
     assert login(http, "ivanov", "").status_code == 422  # an empty password never reaches AD (anonymous bind)
     assert http.get("/ui/", follow_redirects=False).status_code == 303
-    r = login(http, "nobody", "pw")
-    assert r.headers["location"].startswith("/ui/login")
-    assert "ни в одну группу шлюза" in http.get(r.headers["location"]).text
 
 
 def test_emergency_local_admin_when_ad_is_down(http, ad):

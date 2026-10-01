@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% block content %}
 <div class="page-head"><h1>Задачи Qlik</h1>
-{% if is_admin %}<form class="inline" method="post" action="/ui/tasks/sync"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Синхронизировать с Qlik</button></form>{% endif %}</div>
+{% if can_edit %}<form class="inline" method="post" action="/ui/tasks/sync"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Синхронизировать с Qlik</button></form>{% endif %}</div>
 <p class="muted">Каталог reload-задач, доступных через шлюз: приложения с custom property ExternalRun=Yes. Кому доступна задача — по GatewayClient в QMC и ручной выдаче в карточке клиента. Синхронизация — автоматически раз в 10 минут или кнопкой.</p>
 <div class="table-wrap"><table>
 <tr><th>Задача</th><th>Приложение / поток</th><th>Qlik</th><th>Кому доступна</th><th class="num">Запусков</th><th>Последний</th><th>Ограничения</th><th class="actions-cell"></th></tr>
@@ -13,7 +13,7 @@
 <td class="small">{% if t.blocked %}<span class="badge bad">заблокирована</span><div class="muted">{{ t.blocked_reason }}</div>{% endif %}
 {% if t.min_interval_seconds %}<div>не чаще 1 раза в {{ t.min_interval_seconds|dur }}</div>{% endif %}
 {% if not t.blocked and not t.min_interval_seconds %}<span class="muted">—</span>{% endif %}</td>
-<td class="actions-cell">{% if is_admin %}<a class="btn sm" href="/ui/tasks/{{ t.id }}/edit">Edit</a>{% endif %}</td></tr>
-{% else %}<tr><td colspan="8" class="muted">Каталог пуст. {% if is_admin %}Нажмите «Синхронизировать с Qlik».{% endif %}</td></tr>{% endfor %}
+<td class="actions-cell">{% if can_edit %}<a class="btn sm" href="/ui/tasks/{{ t.id }}/edit">Edit</a>{% endif %}</td></tr>
+{% else %}<tr><td colspan="8" class="muted">Каталог пуст. {% if can_edit %}Нажмите «Синхронизировать с Qlik».{% endif %}</td></tr>{% endfor %}
 </table></div>
 {% endblock %}

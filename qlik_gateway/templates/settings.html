@@ -49,9 +49,14 @@
 <td>{% if u.role == "admin" %}<span class="badge info">admin</span>{% else %}<span class="badge muted">{{ u.role }}</span>{% endif %}{% if u.role == "team" %}<div class="small">{% for cid in u.client_ids or [] %}{{ client_names.get(cid, "#" ~ cid) }}{% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}</td>
 <td class="small">{{ u.last_login_at|dt }}</td>
 <td>{{ "да" if u.enabled else "нет" }}</td>
-<td>{% if u.username != admin %}<form class="inline" method="post" action="/ui/users/{{ u.id }}/toggle"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="sm">{{ "Отключить" if u.enabled else "Включить" }}</button></form>{% endif %}</td></tr>{% endfor %}
+<td>{% if is_admin and u.username != admin %}<form class="inline" method="post" action="/ui/users/{{ u.id }}/toggle"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="sm">{{ "Отключить" if u.enabled else "Включить" }}</button></form>{% endif %}</td></tr>{% endfor %}
 </table></div>
-<p class="muted small">Вход через AD: {% if ldap_on %}<b>включён</b> ({{ ldap_url }}); роль берётся из групп при каждом входе: <span class="mono">{{ ldap_admin }}</span> → admin, <span class="mono">{{ ldap_viewer }}</span> → viewer, группы на карточке клиента → команда (видит только своего клиента). Пользователь AD появляется здесь после первого входа.{% else %}<b>выключен</b> (задайте QGW_LDAP_URL в .env).{% endif %}
+<p class="muted small">Вход через AD: {% if ldap_on %}<b>включён</b> ({{ ldap_url }}). Роль — при каждом входе:
+группа <span class="mono">{{ ldap_groups }}</span> + логин из списка админов (<span class="mono">{{ ldap_admin_users or "пусто" }}</span>) → <b>admin</b>;
+группа без логина в списке → <b>editor</b> (всё, кроме токенов и пользователей);
+группа команды с карточки клиента → <b>team</b> (только свой клиент);
+остальные пользователи AD → <b>{{ ldap_default_role if ldap_default_role != "none" else "нет доступа" }}</b>.
+Пользователь AD появляется здесь после первого входа.{% else %}<b>выключен</b> (задайте QGW_LDAP_URL в .env).{% endif %}
 Отключённый пользователь выходит из UI при следующем действии. Аварийная локальная учётка работает и без AD: <span class="mono">C:\qgw\manage.cmd create-admin &lt;логин&gt;</span></p>
 </div>
 {% endblock %}

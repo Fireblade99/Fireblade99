@@ -174,6 +174,17 @@ def can_see_execution(request: Request, db: Session, ex: Execution) -> bool:
     )
 
 
+def can_edit(request: Request) -> bool:
+    """Admin and editor change settings, clients, tasks; only an admin issues tokens and manages users."""
+    return request.session.get("role") in ("admin", "editor")
+
+
+def require_editor(request: Request, user: str = Depends(admin_user)) -> str:
+    if not can_edit(request):
+        raise HTTPException(403, "Недостаточно прав: действие доступно редактору или администратору")
+    return user
+
+
 def require_admin(request: Request, user: str = Depends(admin_user)) -> str:
     """Actions that change anything; a viewer only looks."""
     if not is_admin(request):
@@ -199,6 +210,7 @@ async def check_csrf(request: Request) -> None:
 def render(request: Request, name: str, **ctx) -> HTMLResponse:
     ctx.setdefault("admin", request.session.get("admin"))
     ctx["is_admin"] = is_admin(request)
+    ctx["can_edit"] = can_edit(request)
     ctx["role"] = request.session.get("role")
     ctx["display"] = request.session.get("display")
     ctx["csrf"] = csrf_token(request)
@@ -288,7 +300,7 @@ def login(
         if found is None:
             done("denied", "Неверный логин или пароль")
             return retry
-        role, clients = ldap_auth.resolve_role(settings, found.groups, db.scalars(select(Client)).all())
+        role, clients = ldap_auth.resolve_role(settings, found.username, found.groups, db.scalars(select(Client)).all())
         if role is None:
             done(
                 "denied",
@@ -456,7 +468,7 @@ def dashboard(request: Request, user: str = Depends(admin_user), db: Session = D
 # settings (admin only)
 # ------------------------------------------------------------------------------------------
 @router.get("/settings")
-def settings_page(request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)):
+def settings_page(request: Request, user: str = Depends(require_editor), db: Session = Depends(get_db)):
     s = get_settings()
     return render(
         request,
@@ -472,8 +484,9 @@ def settings_page(request: Request, user: str = Depends(require_admin), db: Sess
         client_names={c.id: c.name for c in db.scalars(select(Client))},
         ldap_on=ldap_auth.enabled(s),
         ldap_url=s.ldap_url,
-        ldap_admin=s.ldap_admin_groups,
-        ldap_viewer=s.ldap_viewer_groups,
+        ldap_groups=s.ldap_groups,
+        ldap_admin_users=s.ldap_admin_users,
+        ldap_default_role=s.ldap_default_role,
     )
 
 
@@ -494,7 +507,7 @@ def toggle_dispatch(
     request: Request,
     pause: str = Form(...),
     reason: str = Form(""),
-    user: str = Depends(require_admin),
+    user: str = Depends(require_editor),
     db: Session = Depends(get_db),
 ):
     if pause == "1":
@@ -514,7 +527,7 @@ def save_runtime(
     max_concurrent_executions: str = Form(...),
     poll_interval_seconds: str = Form(...),
     reset: str = Form(""),
-    user: str = Depends(require_admin),
+    user: str = Depends(require_editor),
     db: Session = Depends(get_db),
 ):
     before = runtime.effective(db, get_settings())
@@ -661,7 +674,7 @@ def client_edit_page(client_id: int, request: Request, user: str = Depends(admin
 
 @router.post("/clients/{client_id}", dependencies=[Depends(check_csrf)])
 async def client_update(
-    client_id: int, request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)
+    client_id: int, request: Request, user: str = Depends(require_editor), db: Session = Depends(get_db)
 ):
     c = db.get(Client, client_id) or _404()
     form = await request.form()
@@ -693,7 +706,7 @@ def client_block(
     reason: str = Form(""),
     cancel_queued: str = Form(""),
     stop_running: str = Form(""),
-    user: str = Depends(require_admin),
+    user: str = Depends(require_editor),
     db: Session = Depends(get_db),
     backend=Depends(get_backend),
 ):
@@ -725,7 +738,9 @@ def client_block(
 
 
 @router.post("/clients/{client_id}/unblock", dependencies=[Depends(check_csrf)])
-def client_unblock(client_id: int, request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)):
+def client_unblock(
+    client_id: int, request: Request, user: str = Depends(require_editor), db: Session = Depends(get_db)
+):
     c = db.get(Client, client_id) or _404()
     c.enabled = True
     c.blocked_reason = ""
@@ -768,7 +783,7 @@ def tasks_page(request: Request, user: str = Depends(admin_user), db: Session = 
 
 @router.post("/tasks/sync", dependencies=[Depends(check_csrf)])
 def tasks_sync(
-    request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db), backend=Depends(get_backend)
+    request: Request, user: str = Depends(require_editor), db: Session = Depends(get_db), backend=Depends(get_backend)
 ):
     try:
         n = svc.sync_catalog(db, backend)
@@ -780,7 +795,7 @@ def tasks_sync(
 
 
 @router.get("/tasks/{task_id}/edit")
-def task_edit_page(task_id: str, request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)):
+def task_edit_page(task_id: str, request: Request, user: str = Depends(require_editor), db: Session = Depends(get_db)):
     t = db.get(QlikTask, task_id) or _404()
     last_runs = db.scalars(
         select(Execution).where(Execution.task_id == task_id).order_by(Execution.id.desc()).limit(10)
@@ -803,7 +818,7 @@ def task_update(
     blocked_reason: str = Form(""),
     min_interval_seconds: int = Form(0),
     if_running_policy: str = Form(""),
-    user: str = Depends(require_admin),
+    user: str = Depends(require_editor),
     db: Session = Depends(get_db),
 ):
     t = db.get(QlikTask, task_id) or _404()
@@ -957,7 +972,7 @@ def execution_page(execution_id: int, request: Request, user: str = Depends(admi
 
 def _can_cancel(request: Request, ex: Execution) -> bool:
     """Admin: any run. Team: its own run that no other request is waiting for."""
-    if is_admin(request):
+    if can_edit(request):
         return True
     sc = scope(request)
     return sc is not None and ex.client_id in sc and not ex.dedup_hits

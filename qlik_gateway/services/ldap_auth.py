@@ -133,14 +133,13 @@ def _names(raw: str) -> set[str]:
     return {x.strip().lower() for x in raw.replace(";", ",").split(",") if x.strip()}
 
 
-def resolve_role(settings: Settings, groups: list[str], clients: list) -> tuple[str | None, list[int]]:
-    """Role from AD groups: admin > viewer > team (clients whose team groups the user is in)."""
+def resolve_role(settings: Settings, username: str, groups: list[str], clients: list) -> tuple[str | None, list[int]]:
+    """admin: gateway group + login in the admin list; editor: gateway group; team: a client's team group;
+    anyone else: the default role (viewer) or no access."""
     mine = {g.lower() for g in groups}
-    if mine & _names(settings.ldap_admin_groups):
-        return "admin", []
-    if mine & _names(settings.ldap_viewer_groups):
-        return "viewer", []
+    if mine & _names(settings.ldap_groups):
+        return ("admin" if username.lower() in _names(settings.ldap_admin_users) else "editor"), []
     team = [c.id for c in clients if mine & {g.lower() for g in (c.ui_groups or [])}]
     if team:
         return "team", team
-    return None, []
+    return (None if settings.ldap_default_role == "none" else settings.ldap_default_role), []

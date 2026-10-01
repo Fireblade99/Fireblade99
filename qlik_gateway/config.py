@@ -29,9 +29,14 @@ class Settings(BaseSettings):
     ldap_start_tls: bool = False  # for ldap:// on port 389
     ldap_verify_ssl: str = "system"  # system (Windows store) / false / path to a CA .pem
     ldap_timeout_seconds: int = 5
-    # AD groups (CN, comma separated) -> roles; team groups are set on each client's card in the UI
-    ldap_admin_groups: str = "QGW-Admins"
-    ldap_viewer_groups: str = "QGW-Viewers"
+    # Roles at every login:
+    #   in ldap_groups and the login is in ldap_admin_users -> admin
+    #   in ldap_groups                                      -> editor (all but tokens and UI users)
+    #   in a team group (set on a client's card in the UI)  -> team (only its clients)
+    #   any other AD user                                   -> ldap_default_role (viewer, or none = no access)
+    ldap_groups: str = "QGW-Admins"  # AD groups (CN), comma separated
+    ldap_admin_users: str = ""  # logins (sAMAccountName), comma separated
+    ldap_default_role: Literal["viewer", "none"] = "viewer"
     # Time zone of the admin UI (display and date inputs), as a fixed offset from UTC in hours.
     # The database and the client API always use UTC.
     ui_utc_offset_hours: float = 5.0

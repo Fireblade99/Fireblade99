@@ -86,7 +86,11 @@ def main() -> None:
     ad = sub.add_parser("create-admin", help="create a UI user or reset its password")
     ad.add_argument("username")
     ad.add_argument("--password")
-    ad.add_argument("--role", choices=["admin", "viewer"], help="admin: everything; viewer: read-only")
+    ad.add_argument(
+        "--role",
+        choices=["admin", "editor", "viewer"],
+        help="admin: everything; editor: all but tokens and UI users; viewer: read-only",
+    )
     ad.set_defaults(fn=cmd_create_admin)
 
     c = sub.add_parser("create-client", help="register an API client and print its token")
