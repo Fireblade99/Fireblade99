@@ -238,16 +238,24 @@ groups:
       # ожидания не должны за неё отвечать.
       # ===============================================================
 
+      # wait_event в by добавлен, а usename и application_name — нет, и
+      # это осознанно. Здесь интересен БЛОКИРОВЩИК, а разбивка по меткам
+      # размножила бы экземпляры по жертвам: двадцать вставших задач
+      # дали бы двадцать строк в уведомлении, и ни одна не назвала бы
+      # виновника. А вот wait_event говорит о природе затора и имеет
+      # десяток возможных значений, то есть ничего не размножает:
+      # transactionid — ждут чужую транзакцию (конфликт по строкам),
+      # relation — ждут блокировку таблицы, обычно DDL или VACUUM FULL.
       - alert: СессииЖдутБлокировку
         expr: |
-          sum by (pg_group, pg_instance, datname) (
+          sum by (pg_group, pg_instance, datname, wait_event) (
             pg_stat_activity_count{pg_group="prod-dp",wait_event_type="Lock"}
           ) > 0
         for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "{{ $value }} сессий ждут блокировку на {{ $labels.pg_instance }} ({{ $labels.datname }}) больше 2 минут"
+          summary: "{{ $value }} сессий ждут {{ $labels.wait_event }} на {{ $labels.pg_instance }} ({{ $labels.datname }}) больше 2 минут"
           description: >-
             Кто кого держит: SELECT blocked.pid AS blocked_pid,
             blocked.query AS blocked_query, blocking.pid AS blocking_pid,

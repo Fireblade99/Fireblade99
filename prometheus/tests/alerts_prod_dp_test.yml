@@ -162,7 +162,7 @@ tests:
       - expr: 'ALERTS{alertname="СессииЖдутБлокировку",alertstate="firing"}'
         eval_time: 2m
         exp_samples:
-          - labels: 'ALERTS{alertname="СессииЖдутБлокировку",alertstate="firing",datname="dwh",pg_group="prod-dp",pg_instance="dwh-dbp10-lp2",severity="warning"}'
+          - labels: 'ALERTS{alertname="СессииЖдутБлокировку",alertstate="firing",datname="dwh",pg_group="prod-dp",pg_instance="dwh-dbp10-lp2",severity="warning",wait_event="transactionid"}'
             value: 1
       # ожидание кончилось — тревоги нет вообще
       - expr: 'ALERTS{alertname="СессииЖдутБлокировку"}'
@@ -175,13 +175,13 @@ tests:
       - expr: 'ALERTS{alertname="СессииЖдутБлокировку",alertstate="pending"}'
         eval_time: 5m
         exp_samples:
-          - labels: 'ALERTS{alertname="СессииЖдутБлокировку",alertstate="pending",datname="dwh",pg_group="prod-dp",pg_instance="dwh-dbp10-lp2",severity="warning"}'
+          - labels: 'ALERTS{alertname="СессииЖдутБлокировку",alertstate="pending",datname="dwh",pg_group="prod-dp",pg_instance="dwh-dbp10-lp2",severity="warning",wait_event="transactionid"}'
             value: 1
       # две минуты набрались — сработало
       - expr: 'ALERTS{alertname="СессииЖдутБлокировку",alertstate="firing"}'
         eval_time: 6m
         exp_samples:
-          - labels: 'ALERTS{alertname="СессииЖдутБлокировку",alertstate="firing",datname="dwh",pg_group="prod-dp",pg_instance="dwh-dbp10-lp2",severity="warning"}'
+          - labels: 'ALERTS{alertname="СессииЖдутБлокировку",alertstate="firing",datname="dwh",pg_group="prod-dp",pg_instance="dwh-dbp10-lp2",severity="warning",wait_event="transactionid"}'
             value: 1
 
   # ------------------------------------------------------------------
