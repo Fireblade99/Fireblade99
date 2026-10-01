@@ -33,6 +33,19 @@ if ($LASTEXITCODE) { throw "pip failed (check -IndexUrl / -TrustedHost)" }
 
 Write-Host "==> start"
 foreach ($n in "QlikGateway-API", "QlikGateway-Worker") { Start-ScheduledTask -TaskName $n }
-Start-Sleep -Seconds 8
-$v = ((Invoke-WebRequest "http://localhost:$Port/openapi.json" -UseBasicParsing).Content | Select-String '"version":"[^"]*"').Matches.Value
-Write-Host "running: $v" -ForegroundColor Green
+# the API needs a few seconds (more on a busy server): wait up to 60 s, then show the log instead of failing
+$v = $null
+for ($i = 0; $i -lt 30 -and -not $v; $i++) {
+    Start-Sleep -Seconds 2
+    try {
+        $v = ((Invoke-WebRequest "http://localhost:$Port/openapi.json" -UseBasicParsing -TimeoutSec 5).Content |
+            Select-String '"version":"[^"]*"').Matches.Value
+    } catch { }
+}
+if ($v) {
+    Write-Host "running: $v" -ForegroundColor Green
+} else {
+    Write-Warning "The gateway did not answer on port $Port within 60 s. Last lines of $InstallDir\logs\api.log:"
+    Get-Content (Join-Path $InstallDir "logs\api.log") -Tail 40 -ErrorAction SilentlyContinue
+    exit 1
+}
