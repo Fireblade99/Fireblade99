@@ -162,13 +162,27 @@ def admin_audit(db: Session, request: Request, action: str, **fields) -> None:
 # ------------------------------------------------------------------------------------------
 # login
 # ------------------------------------------------------------------------------------------
+def safe_next(value: str | None) -> str:
+    """Where to go after login: only pages of this UI (no open redirect to another site)."""
+    value = (value or "").strip()
+    if value.startswith("/ui/") and not value.startswith("/ui/login") and "\\" not in value and "//" not in value:
+        return value
+    return "/ui/"
+
+
 @router.get("/login")
-def login_page(request: Request):
-    return render(request, "login.html")
+def login_page(request: Request, next: str = ""):
+    return render(request, "login.html", next=safe_next(next))
 
 
 @router.post("/login", dependencies=[Depends(check_csrf)])
-def login(request: Request, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+def login(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    next: str = Form(""),
+    db: Session = Depends(get_db),
+):
     user = db.scalars(select(AdminUser).where(AdminUser.username == username)).first()
     ok = user is not None and user.enabled and verify_password(password, user.password_hash)
     audit(
@@ -182,11 +196,11 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
     )
     if not ok:
         flash(request, "Неверный логин или пароль", "bad")
-        return back("/ui/login")
+        return back("/ui/login?" + urlencode({"next": safe_next(next)}))
     request.session.clear()
     request.session["admin"] = username
     request.session["role"] = user.role or "admin"
-    return back("/ui/")
+    return back(safe_next(next))
 
 
 @router.post("/logout")

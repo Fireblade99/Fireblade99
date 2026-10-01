@@ -195,3 +195,22 @@ def test_if_running_policy_set_in_ui(http, coordinator, make_client):
     with session_scope() as db:
         assert db.get(QlikTask, SALES).if_running_policy is None
         assert db.get(Client, cid).if_running_policy is None
+
+
+def test_login_returns_to_the_requested_page(http):
+    r = http.get("/ui/executions/31", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/ui/login?next=%2Fui%2Fexecutions%2F31"
+    page = http.get(r.headers["location"]).text
+    assert 'name="next" value="/ui/executions/31"' in page
+    csrf = re.search(r'name="csrf" value="([^"]+)"', page).group(1)
+    r = http.post(
+        "/ui/login",
+        data={"username": "admin", "password": "admin-pass", "csrf": csrf, "next": "/ui/executions/31"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303 and r.headers["location"] == "/ui/executions/31"
+
+    from qlik_gateway.api.admin import safe_next
+
+    for bad in ("https://evil.example/ui/", "//evil.example", "/ui//evil.example", "/ui/login", "", "/api/v1/tasks"):
+        assert safe_next(bad) == "/ui/"

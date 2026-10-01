@@ -3,6 +3,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
@@ -117,7 +118,11 @@ def create_app(settings: Settings | None = None, backend=None) -> FastAPI:
 
     @app.exception_handler(admin.NotLoggedIn)
     async def not_logged_in(request: Request, exc):
-        return RedirectResponse("/ui/login", status_code=303)
+        # come back to the requested page after login (e.g. a link to an execution from an Airflow log)
+        target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        if request.method != "GET" or target in ("/ui", "/ui/"):
+            return RedirectResponse("/ui/login", status_code=303)
+        return RedirectResponse("/ui/login?" + urlencode({"next": target}), status_code=303)
 
     # SessionMiddleware must wrap the audit middleware so the UI has request.session
     app.add_middleware(
