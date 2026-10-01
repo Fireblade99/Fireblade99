@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # "jwt"  - QRS via a dedicated Virtual Proxy with JWT authentication (recommended by vendor)
     # "mock" - in-process fake Qlik for development, demos and tests
     qlik_mode: Literal["jwt", "mock"] = "mock"
+    # reload duration range of the fake Qlik, seconds
+    mock_min_duration: float = 5
+    mock_max_duration: float = 25
     # Base URL of the virtual proxy, e.g. https://qlik.company.local/airflowgw
     qlik_base_url: str = "https://qlik.local/airflowgw"
     # TLS verification of the Qlik certificate:

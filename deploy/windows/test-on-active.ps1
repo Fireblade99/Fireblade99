@@ -127,10 +127,16 @@ Check "2. queue (B) -> collapsed into the same queued run" ($qb.http -eq 202 -an
 $qs = Get-State $TokenA $queued
 Check "2. queued run waits for the active one" ($qs.status -eq "QUEUED") "status=$($qs.status)"
 
+Write-Host "   reject while a queue run is waiting behind the active one"
+$xq = Start-Reload $TokenB "reject" "B-reject-2"; Show $xq
+Check "2. reject is still a conflict (not joined to the queued run)" ($xq.http -eq 409 -and [int]$xq.running_execution.execution_id -eq $first) "http=$($xq.http)"
+Check "2. reject tells about the queued run too" ([int]$xq.queued_execution.execution_id -eq $queued) "queued=$($xq.queued_execution.execution_id)"
+
 # ---------------------------------------------------------------------------------------------
 Write-Host ""
 if ($script:failed) {
     Write-Host "$($script:failed) check(s) FAILED" -ForegroundColor Red
     exit 1
 }
-Write-Host "All checks passed. Execution $queued will reload the task once more after $first; see $Gateway/ui/executions" -ForegroundColor Green
+Write-Host "All checks passed. Execution $queued will reload the task once more after $first." -ForegroundColor Green
+Write-Host "Every request (who, on_active, result, reason of a refusal): $Gateway/ui/executions/$first#requests and $Gateway/ui/executions/$queued#requests" -ForegroundColor Green

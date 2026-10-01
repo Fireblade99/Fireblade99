@@ -178,22 +178,43 @@ def start_task(
     request.state.audit.update(action="start", task_id=task_id)
     initiator = initiator_meta(request)
     initiator.update({k: str(v)[:300] for k, v in (body.meta or {}).items()})
-    res = svc.submit(
-        db,
-        client,
-        task_id,
-        initiator=initiator,
-        caller_ip=client_ip(request),
-        priority=body.priority,
-        on_active=body.requested_on_active(),
-        running_info=lambda e: running_info(e, client, request),
-    )
+    requested = body.requested_on_active()
+    try:
+        res = svc.submit(
+            db,
+            client,
+            task_id,
+            initiator=initiator,
+            caller_ip=client_ip(request),
+            priority=body.priority,
+            on_active=requested,
+            running_info=lambda e: running_info(e, client, request),
+        )
+    except ServiceError as e:
+        if e.code == "already_running":  # the refusal is shown on the page of the run that caused it
+            request.state.audit.update(
+                execution_id=e.extra["running_execution"]["execution_id"],
+                meta=initiator
+                | {
+                    "result": "rejected",
+                    "on_active": e.extra.get("on_active"),
+                    "on_active_requested": requested,
+                    "policy_source": e.extra.get("policy_source"),
+                },
+            )
+        raise
     ex = res.execution
     db.commit()  # the caller must be able to read the execution as soon as it gets the id
     request.state.audit.update(
         execution_id=ex.id,
-        message=("deduplicated" if res.deduplicated else "queued")
-        + f" (on_active={res.on_active} from {res.source})"
+        meta=initiator
+        | {
+            "result": res.outcome,
+            "on_active": res.on_active,
+            "on_active_requested": res.requested,
+            "policy_source": res.source,
+        },
+        message=f"{res.outcome} (on_active={res.on_active} from {res.source})"
         + "".join(f"; {w['code']}" for w in res.warnings),
     )
     out = exec_state(ex)

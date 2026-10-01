@@ -214,3 +214,25 @@ def test_login_returns_to_the_requested_page(http):
 
     for bad in ("https://evil.example/ui/", "//evil.example", "/ui//evil.example", "/ui/login", "", "/api/v1/tasks"):
         assert safe_next(bad) == "/ui/"
+
+
+def test_execution_page_lists_every_start_request(http, coordinator, make_client, mock):
+    from qlik_gateway.services.audit import audit_queue
+
+    mock.min_duration = mock.max_duration = 60
+    _, a = make_client("test-a")
+    _, b = make_client("test-b")
+    first = http.post(f"/api/v1/tasks/{SALES}/start", headers={**a, "X-Airflow-Dag-Id": "dag_a"}).json()
+    http.post(f"/api/v1/tasks/{SALES}/start", headers=b)  # collapsed (still waiting in the gateway)
+    coordinator.tick(force=True)
+    http.post(f"/api/v1/tasks/{SALES}/start", headers=b, json={"on_active": "reuse"})
+    assert http.post(f"/api/v1/tasks/{SALES}/start", headers=b, json={"meta": {"who": "B"}}).status_code == 409
+    audit_queue.flush()
+    _login(http)
+    page = http.get(f"/ui/executions/{first['execution_id']}").text
+    section = page[page.index('id="requests"') : page.index("Сообщения Qlik")]
+    assert section.count("test-a") == 1 and section.count("test-b") == 3
+    for label in ("создал запуск", "присоединён", "получил активный запуск", "отказ 409"):
+        assert label in section
+    assert "уже перезагружалась в Qlik" in section and "dag_a" in section and "who:" in section
+    assert ">+2</a>" in http.get("/ui/executions").text  # collapsed + reused

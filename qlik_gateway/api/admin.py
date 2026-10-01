@@ -76,6 +76,41 @@ templates.env.filters["dt"] = lambda d: to_local(d).strftime("%d.%m.%Y %H:%M:%S"
 templates.env.filters["on_active"] = lambda v: normalize_on_active(v) or ""
 templates.env.filters["dt_input"] = lambda d: to_local(d).strftime("%Y-%m-%dT%H:%M") if d else ""
 templates.env.globals["tz_label"] = tz_label
+
+_REQUEST_RESULTS = {
+    "new": ("создал запуск", "ok", "задача была свободна — запущена по этому запросу"),
+    "queued": (
+        "новый запуск после активного",
+        "ok",
+        "on_active=queue: задача перезагружалась, поставлен запуск после неё",
+    ),
+    "collapsed": ("присоединён", "muted", "запуск ещё ждал в очереди шлюза — запрос схлопнут в него"),
+    "reused": (
+        "получил активный запуск",
+        "warn",
+        "on_active=reuse: возвращён уже идущий reload, новых данных в нём может не быть",
+    ),
+    "rejected": ("отказ 409", "bad", ""),
+}
+
+
+def request_result(a: AuditLog) -> tuple[str, str, str]:
+    """(label, badge class, explanation) of a start request, for the execution page."""
+    result = (a.meta or {}).get("result")
+    if result in _REQUEST_RESULTS:
+        label, cls, text = _REQUEST_RESULTS[result]
+        if result == "rejected":
+            text = (
+                f"задача уже перезагружалась в Qlik (запуск #{a.execution_id}) — новый запуск не создан; "
+                "клиенту вернули причину, номер и ссылку на этот запуск"
+            )
+        return label, cls, text
+    if a.outcome != "ok":  # other refusals (limits, rights) or requests from before 0.4.3
+        return f"{a.outcome} {a.status_code or ''}".strip(), "bad", a.message or ""
+    return ("присоединён" if "dedup" in (a.message or "") else "принят"), "muted", a.message or ""
+
+
+templates.env.globals["request_result"] = request_result
 templates.env.globals["app_version"] = __version__  # cache-busting for static files
 templates.env.filters["iso_dt"] = lambda s: templates.env.filters["dt"](datetime.fromisoformat(s)) if s else "—"
 
@@ -788,7 +823,16 @@ def _paginate(db: Session, model, conds: list, f: dict, page: int, per_page: int
 def execution_page(execution_id: int, request: Request, user: str = Depends(admin_user), db: Session = Depends(get_db)):
     ex = db.get(Execution, execution_id) or _404()
     events = db.scalars(select(AuditLog).where(AuditLog.execution_id == execution_id).order_by(AuditLog.id)).all()
-    return render(request, "execution.html", ex=ex, events=events, active=ex.status in ExecStatus.ACTIVE)
+    # every start request that ended up on this run: created it, joined it, got it (reuse) or was refused by it
+    start_requests = [a for a in events if a.action == "api.start"]
+    return render(
+        request,
+        "execution.html",
+        ex=ex,
+        events=[a for a in events if a.action != "api.start"],
+        start_requests=start_requests,
+        active=ex.status in ExecStatus.ACTIVE,
+    )
 
 
 @router.get("/executions/{execution_id}/log")

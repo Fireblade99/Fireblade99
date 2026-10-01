@@ -87,7 +87,15 @@ def create_app(settings: Settings | None = None, backend=None) -> FastAPI:
         extra = getattr(request.state, "audit", None) or {}
         status = response.status_code
         outcome = (
-            "ok" if status < 400 else "limited" if status == 429 else "denied" if status in (401, 403, 423) else "error"
+            "ok"
+            if status < 400
+            else "limited"
+            if status == 429
+            else "denied"
+            if status in (401, 403, 423)
+            else "rejected"
+            if status == 409
+            else "error"
         )
         action = extra.get("action") or request.url.path.removeprefix("/api/v1/").split("/")[0]
         audit_queue.put(
@@ -104,7 +112,7 @@ def create_app(settings: Settings | None = None, backend=None) -> FastAPI:
             user_agent=(request.headers.get("user-agent") or "")[:500],
             task_id=extra.get("task_id"),
             execution_id=extra.get("execution_id"),
-            meta=initiator_meta(request),
+            meta=initiator_meta(request) | (extra.get("meta") or {}),
             message=extra.get("message") or extra.get("error") or "",
         )
         API_REQUESTS.labels(client_name, action, outcome).inc()

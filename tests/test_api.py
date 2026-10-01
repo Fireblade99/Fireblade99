@@ -271,9 +271,16 @@ def test_requests_collapse_while_queued_and_on_active_while_reloading(http, coor
     q1 = http.post(f"/api/v1/tasks/{SALES}/start", headers=b, json={"on_active": "queue"}).json()
     assert q1["execution_id"] != first["execution_id"] and not q1["deduplicated"]
     assert [w["code"] for w in q1["warnings"]] == ["queued_behind_active"]
-    # identical requests collapse into the queued run, whatever on_active they ask for
-    q2 = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"on_active": "reject"}).json()
+    # identical (queue) requests collapse into the queued run
+    q2 = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"on_active": "queue"}).json()
     assert q2["execution_id"] == q1["execution_id"] and q2["deduplicated"]
+    # while the task is reloading, reject stays a conflict even with a queued run behind it
+    rej2 = http.post(f"/api/v1/tasks/{SALES}/start", headers=a)
+    assert rej2.status_code == 409 and rej2.json()["running_execution"]["execution_id"] == first["execution_id"]
+    assert rej2.json()["queued_execution"]["execution_id"] == q1["execution_id"]
+    # and reuse returns the reloading run, not the queued one
+    re2 = http.post(f"/api/v1/tasks/{SALES}/start", headers=b, json={"on_active": "reuse"}).json()
+    assert re2["execution_id"] == first["execution_id"]
     assert http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"on_active": "nope"}).status_code == 422
     # a run others are waiting for cannot be cancelled by one of them
     c = http.post(f"/api/v1/executions/{q1['execution_id']}/cancel", headers=b)

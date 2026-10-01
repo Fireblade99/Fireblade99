@@ -8,7 +8,9 @@ def make_backend(settings: Settings, call_hook: CallHook | None = None) -> QlikB
     if settings.qlik_mode == "mock":
         from .mock import get_mock
 
-        return get_mock(call_hook)
+        mock = get_mock(call_hook)
+        mock.min_duration, mock.max_duration = settings.mock_min_duration, settings.mock_max_duration
+        return mock
     from .qrs import QrsJwtClient
 
     return QrsJwtClient(settings, call_hook)

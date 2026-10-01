@@ -48,7 +48,7 @@ class QlikReloadOperator(BaseOperator):
         blocked/disabled) and log it - replaces a separate "check gateway" task in DAGs
     """
 
-    template_fields: Sequence[str] = ("qlik_task_id",)
+    template_fields: Sequence[str] = ("qlik_task_id", "gateway_conn_id")
     ui_color = "#009845"
 
     def __init__(

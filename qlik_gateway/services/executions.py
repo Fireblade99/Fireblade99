@@ -68,6 +68,16 @@ def active_execution_for_task(db: Session, task_id: str) -> Execution | None:
     ).first()
 
 
+def reloading_execution_for_task(db: Session, task_id: str) -> Execution | None:
+    """The run that is in Qlik now (start sent / reloading)."""
+    return db.scalars(
+        select(Execution)
+        .where(Execution.task_id == task_id, Execution.status.in_(ExecStatus.IN_QLIK))
+        .order_by(Execution.id)
+        .limit(1)
+    ).first()
+
+
 def queued_execution_for_task(db: Session, task_id: str) -> Execution | None:
     """An execution that has not been sent to Qlik yet: when it starts, it reads the data as of then."""
     return db.scalars(
@@ -87,6 +97,9 @@ class SubmitResult:
     source: str = "default"  # where the applied policy came from: request / default / client / task
     running: Execution | None = None  # the active execution (collapsed into / reused / queued behind)
     warnings: list[dict] = field(default_factory=list)
+    # what this request got: new / queued (new run after the active one) / collapsed (joined a run
+    # waiting in the gateway queue) / reused (got the run reloading in Qlik)
+    outcome: str = "new"
 
 
 def resolve_on_active(client: Client, task: QlikTask, requested: str | None) -> tuple[str, str]:
@@ -113,12 +126,13 @@ def submit(
 ) -> SubmitResult:
     """Accept a start request.
 
-    1. The task is not reloading and a run of it is waiting in the gateway queue: the request
-       collapses into that run, whoever sent it (one execution id for everybody).
+    1. The task is not reloading: requests collapse into the run waiting in the gateway queue,
+       whoever sent them (one execution id for everybody), whatever on_active they ask for.
     2. The task is reloading in Qlik - on_active (for any client and initiator of the active run):
        "reuse"  - return the active execution (warning: it may not contain data prepared after it started)
-       "queue"  - queue a run that starts after the active one; identical requests collapse into it (1.)
-       "reject" - 409 already_running with the reason and the active execution (default)
+       "queue"  - queue a run that starts after the active one; all "queue" requests collapse into it
+       "reject" - 409 already_running with the reason and the active execution (default),
+                  even if a "queue" run is already waiting behind it
     An administrator may force on_active per task or per client; the answer says which one applied.
     Legacy if_running values (attach/fresh/queue/skip) are accepted.
     """
@@ -143,43 +157,49 @@ def submit(
             }
         )
 
-    # 1. a run that has not reached Qlik yet reads the data as of its start: everybody shares it
-    waiting = queued_execution_for_task(db, task_id)
-    if waiting is not None:
-        waiting.dedup_hits += 1
-        result.execution, result.deduplicated, result.running = waiting, True, waiting
+    waiting = queued_execution_for_task(db, task_id)  # not sent to Qlik yet: reads the data as of its start
+    reloading = reloading_execution_for_task(db, task_id)
+
+    def collapse_into(ex: Execution, outcome: str = "collapsed") -> SubmitResult:
+        ex.dedup_hits += 1
+        result.execution, result.deduplicated, result.running, result.outcome = ex, True, ex, outcome
         return result
 
-    # 2. the task is reloading in Qlik
-    active = active_execution_for_task(db, task_id)
-    if active is not None:
-        if policy == "reuse":
-            active.dedup_hits += 1
-            result.execution, result.deduplicated, result.running = active, True, active
-            since = f" at {active.qlik_started_at:%Y-%m-%d %H:%M:%S} UTC" if active.qlik_started_at else ""
-            result.warnings.append(
-                {
-                    "code": "reused_active_run",
-                    "message": f"Returned execution {active.id}, which was already reloading in Qlik{since}, "
-                    "before this request: data prepared after that may not be loaded by it",
-                }
-            )
-            return result
-        if policy == "reject":
-            raise ServiceError(
-                409,
-                "already_running",
-                f"Task is already {active.status.lower()} in Qlik (execution {active.id}); nothing was started. "
-                "Wait for it and retry, or ask with on_active=queue / reuse",
-                {
-                    "on_active": policy,
-                    "policy_source": source,
-                    "running_execution": running_info(active) if running_info else {"execution_id": active.id},
-                },
-            )
-        running = active  # queue: a new run after the active one
-    else:
+    # 1. the task is not reloading: every request shares the waiting run, whoever sends it
+    if reloading is None:
+        if waiting is not None:
+            return collapse_into(waiting)
         running = None
+    # 2. the task is reloading in Qlik: on_active decides
+    elif policy == "reuse":
+        since = f" at {reloading.qlik_started_at:%Y-%m-%d %H:%M:%S} UTC" if reloading.qlik_started_at else ""
+        result.warnings.append(
+            {
+                "code": "reused_active_run",
+                "message": f"Returned execution {reloading.id}, which was already reloading in Qlik{since}, "
+                "before this request: data prepared after that may not be loaded by it",
+            }
+        )
+        return collapse_into(reloading, "reused")
+    elif policy == "reject":
+        extra = {
+            "on_active": policy,
+            "policy_source": source,
+            "running_execution": running_info(reloading) if running_info else {"execution_id": reloading.id},
+        }
+        if waiting is not None:
+            extra["queued_execution"] = running_info(waiting) if running_info else {"execution_id": waiting.id}
+        raise ServiceError(
+            409,
+            "already_running",
+            f"Task is already {reloading.status.lower()} in Qlik (execution {reloading.id}); nothing was started. "
+            "Wait for it and retry, or ask with on_active=queue / reuse",
+            extra,
+        )
+    else:  # queue: one run after the active one, identical requests collapse into it
+        if waiting is not None:
+            return collapse_into(waiting)
+        running = reloading
 
     now = utcnow()
     starts_last_hour = db.scalar(
@@ -213,7 +233,7 @@ def submit(
     db.flush()
     result.execution = execution
     if running is not None:
-        result.running = running
+        result.running, result.outcome = running, "queued"
         result.warnings.append(
             {
                 "code": "queued_behind_active",
