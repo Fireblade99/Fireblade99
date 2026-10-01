@@ -52,7 +52,7 @@
 <div><label>Приоритет (меньше — раньше)</label><input type="number" name="priority" value="{{ c.priority }}"></div>
 </div>
 <div class="muted small">0 = без ограничения</div>
-{% with policy=c.if_running_policy, empty_label="решает клиент в запросе (по умолчанию fresh)", hint="Принудительное поведение для всех запросов этого клиента, если задача уже запущена. Настройка на задаче важнее этой." %}{% include "_if_running.html" %}{% endwith %}
+{% with policy=c.if_running_policy, empty_label="решает клиент в запросе (по умолчанию reject)", hint="Принудительное поведение для всех запросов этого клиента, если задача уже запущена. Настройка на задаче важнее этой." %}{% include "_on_active.html" %}{% endwith %}
 <label>Токен действует до (пусто = бессрочно)</label>
 <input type="datetime-local" name="token_expires_at" value="{{ c.token_expires_at|dt_input }}">
 {% if is_admin %}<p><button class="primary">{% if is_new %}Создать и выдать токен{% else %}Сохранить{% endif %}</button></p>{% endif %}

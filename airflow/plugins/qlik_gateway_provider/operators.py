@@ -12,7 +12,8 @@ except ImportError:  # parsed on its own by the DAG processor (not covered by .a
     from qlik_gateway_provider._compat import AirflowException, AirflowSkipException, BaseOperator
     from qlik_gateway_provider.hooks import QlikGatewayHook
 
-IF_RUNNING = ("fresh", "attach", "queue", "skip")
+ON_ACTIVE = ("reuse", "queue", "reject")
+LEGACY_IF_RUNNING = {"attach": "reuse", "fresh": "queue", "queue": "queue", "skip": "reject"}
 
 
 class QlikReloadOperator(BaseOperator):
@@ -21,24 +22,28 @@ class QlikReloadOperator(BaseOperator):
     :param qlik_task_id: Qlik reload task id (must be allowed for this client in the gateway)
     :param wait_for_completion: wait until the reload finishes and fail the task if it did not succeed
     :param deferrable: wait in the triggerer instead of holding a worker slot
-    :param if_running: what to do if the same Qlik task is already queued/running (started by anyone):
-        "fresh" (default) - join a run only if it has not been sent to Qlik yet (it will read the data
-                   as of its start); if the reload is already going, queue a new one after it, so the
-                   data this DAG prepared is guaranteed to be loaded
-        "attach" - wait for whatever run is going and take its result (a warning is logged if it
-                   started before this request: it may miss this DAG's data)
-        "queue"  - always start a new reload after the current one finishes
-        "skip"   - start nothing; see on_already_running
-        The gateway administrator may force a policy for the task or the client; the one applied,
-        warnings and the running execution (who/when) are logged and pushed to XCom
-        ("if_running", "warnings", "running_execution").
-    :param on_already_running: with "skip" (requested or forced): "skip" marks this Airflow task
-        skipped, "fail" fails it so Airflow retries later according to retries / retry_delay
-    :param dedupe: legacy alias: True = if_running="attach", False = if_running="queue"
+    :param on_active: what to do if the same Qlik task is already RELOADING in Qlik (started by anyone).
+        A run still waiting in the gateway queue is always shared: all requests get one execution id.
+        "reject" - (the gateway default, used when None) the gateway refuses with a conflict, the
+                   reason and the active run (who/when/link); see on_reject
+        "queue"  - run again after the active reload; identical requests collapse into that one run.
+                   Use it when this DAG has just prepared data that the reload must pick up
+        "reuse"  - wait for the active reload and take its result (a warning is logged: it started
+                   before this request and may not contain this DAG's data)
+        The gateway administrator may force a value for the task or the client; the one applied,
+        warnings and the active run are logged and pushed to XCom
+        ("on_active", "warnings", "running_execution", "execution_url").
+    :param on_reject: when the gateway rejects the start: "fail" (default) fails this Airflow task so
+        it is retried later according to retries / retry_delay; "skip" marks it skipped
+    :param if_running: legacy alias of on_active (attach=reuse, fresh/queue=queue, skip=reject)
+    :param on_already_running: legacy alias of on_reject
+    :param dedupe: legacy alias: True = reuse, False = queue
     :param poll_interval: long-poll period against the gateway (the gateway itself polls Qlik)
     :param max_wait: give up waiting after this long (the reload itself keeps running)
     :param cancel_on_kill: stop the reload if the Airflow task is killed (only if it was started by this task)
-    :param push_log: put Qlik's script log into the Airflow task log when the reload fails
+    :param push_log: what to put into the Airflow task log when the reload fails:
+        "errors" (default) - only the script error (the lines after Qlik's "error occurred") and a link
+        to the execution page of the gateway; "full" - also the tail of the script log; False - nothing
     :param preflight: before starting, check the token and the task (client, rights, task name,
         blocked/disabled) and log it - replaces a separate "check gateway" task in DAGs
     """
@@ -53,13 +58,15 @@ class QlikReloadOperator(BaseOperator):
         gateway_conn_id: str = QlikGatewayHook.default_conn_name,
         wait_for_completion: bool = True,
         deferrable: bool = False,
-        if_running: str = "fresh",
-        on_already_running: str = "skip",
+        on_active: str | None = None,
+        on_reject: str = "fail",
+        if_running: str | None = None,
+        on_already_running: str | None = None,
         dedupe: bool | None = None,
         poll_interval: int = 30,
         max_wait: timedelta = timedelta(hours=6),
         cancel_on_kill: bool = True,
-        push_log: bool = True,
+        push_log: str | bool = "errors",
         preflight: bool = True,
         **kwargs,
     ):
@@ -68,20 +75,30 @@ class QlikReloadOperator(BaseOperator):
         self.gateway_conn_id = gateway_conn_id
         self.wait_for_completion = wait_for_completion
         self.deferrable = deferrable
-        if dedupe is not None:
-            if_running = "attach" if dedupe else "queue"
-        if if_running not in IF_RUNNING:
-            raise ValueError("if_running must be one of: " + ", ".join(IF_RUNNING))
-        if on_already_running not in ("skip", "fail"):
-            raise ValueError("on_already_running must be 'skip' or 'fail'")
-        self.if_running = if_running
-        self.on_already_running = on_already_running
+        if on_active is None and if_running is not None:
+            if if_running not in LEGACY_IF_RUNNING:
+                raise ValueError("if_running must be one of: " + ", ".join(LEGACY_IF_RUNNING))
+            on_active = LEGACY_IF_RUNNING[if_running]
+        if on_active is None and dedupe is not None:
+            on_active = "reuse" if dedupe else "queue"
+        if on_active is not None and on_active not in ON_ACTIVE:
+            raise ValueError("on_active must be one of: " + ", ".join(ON_ACTIVE))
+        on_reject = on_already_running or on_reject
+        if on_reject not in ("skip", "fail"):
+            raise ValueError("on_reject must be 'fail' or 'skip'")
+        if push_log is True:
+            push_log = "errors"
+        if push_log not in (False, None, "errors", "full"):
+            raise ValueError("push_log must be 'errors', 'full' or False")
+        self.on_active = on_active
+        self.on_reject = on_reject
         self.poll_interval = poll_interval
         self.max_wait = max_wait
         self.cancel_on_kill = cancel_on_kill
         self.push_log = push_log
         self.preflight = preflight
         self._execution_id: int | None = None
+        self._url: str | None = None
         self._owned = False
         self._hook: QlikGatewayHook | None = None
 
@@ -89,31 +106,36 @@ class QlikReloadOperator(BaseOperator):
         self._hook = hook = QlikGatewayHook(self.gateway_conn_id, context=context)
         if self.preflight:
             self._preflight(hook)
-        started = hook.start_task(self.qlik_task_id, if_running=self.if_running)
+        started = hook.start_task(self.qlik_task_id, on_active=self.on_active)
+        ti = context["ti"]
         running = started.get("running_execution")
-        applied = started.get("if_running")
-        if applied and applied != self.if_running:
-            self.log.info("if_running=%s applied by the gateway (set on the %s)", applied, started.get("policy_source"))
+        applied = started.get("on_active")
+        if applied and self.on_active and applied != self.on_active:
+            self.log.info("on_active=%s applied by the gateway (set on the %s)", applied, started.get("policy_source"))
         for w in started.get("warnings") or []:
             self.log.warning("Qlik Gateway: %s: %s", w.get("code"), w.get("message"))
-        context["ti"].xcom_push(key="if_running", value=applied)
-        context["ti"].xcom_push(key="warnings", value=started.get("warnings") or [])
+        ti.xcom_push(key="on_active", value=applied)
+        ti.xcom_push(key="warnings", value=started.get("warnings") or [])
+        ti.xcom_push(key="running_execution", value=running)
         if started.get("error") == "already_running":
-            self.log.info("Qlik task is already running: %s", _describe(running))
-            context["ti"].xcom_push(key="running_execution", value=running)
-            if self.on_already_running == "fail":
-                raise AirflowException(f"{started.get('message')}; will be retried per retries/retry_delay")
-            raise AirflowSkipException(f"Skipped: {started.get('message')}")
+            self.log.warning("Qlik task is already reloading: %s", _describe(running))
+            msg = f"Rejected by Qlik Gateway: {started.get('message')}"
+            if running and running.get("url"):
+                msg += f". Active run: {running['url']}"
+            if self.on_reject == "skip":
+                raise AirflowSkipException(msg)
+            raise AirflowException(msg + " (will be retried per retries / retry_delay)")
         self._execution_id = started["execution_id"]
+        self._url = started.get("url")
         self._owned = not started.get("deduplicated")
-        context["ti"].xcom_push(key="execution_id", value=self._execution_id)
-        context["ti"].xcom_push(key="deduplicated", value=bool(started.get("deduplicated")))
-        context["ti"].xcom_push(key="running_execution", value=running)
+        ti.xcom_push(key="execution_id", value=self._execution_id)
+        ti.xcom_push(key="execution_url", value=self._url)
+        ti.xcom_push(key="deduplicated", value=bool(started.get("deduplicated")))
         if started.get("deduplicated"):
-            self.log.info("Qlik task is already running, attached to it: %s", _describe(running))
+            self.log.info("Joined an existing run of the Qlik task: %s", _describe(running))
         elif running:
             self.log.info(
-                "Qlik task is running now (%s); new execution %s queued after it, it will load the current data",
+                "Qlik task is reloading now (%s); new execution %s queued after it, it will load the current data",
                 _describe(running),
                 self._execution_id,
             )
@@ -121,6 +143,8 @@ class QlikReloadOperator(BaseOperator):
             self.log.info(
                 "Qlik task %s -> gateway execution %s (%s)", self.qlik_task_id, self._execution_id, started["status"]
             )
+        if self._url:
+            self.log.info("Execution page: %s", self._url)
         if not self.wait_for_completion:
             return self._execution_id
 
@@ -165,16 +189,29 @@ class QlikReloadOperator(BaseOperator):
 
     def _handle_result(self, state: dict, hook: QlikGatewayHook):
         eid = state.get("execution_id", self._execution_id)
+        url = state.get("url") or self._url
         if state.get("status") == "SUCCESS":
             self.log.info("Qlik reload finished in %.0fs", state.get("duration_seconds") or 0)
             return eid
-        if self.push_log and eid:
+        detail = state.get("error_detail")
+        if self.push_log:
+            # only the error, not the whole script log: logs can be huge; the rest is one click away
+            self.log.error(
+                "Qlik reload %s: %s\n%s\nDetails and full log: %s",
+                eid,
+                state.get("status"),
+                detail or state.get("error") or state.get("message") or "-",
+                url or "-",
+            )
+        if self.push_log == "full" and eid:
             try:
                 self.log.error("Qlik script log (tail):\n%s", hook.get_log(eid)[-20_000:])
             except AirflowException as e:
                 self.log.warning("Script log unavailable: %s", e)
-        reason = state.get("error_detail") or state.get("error") or state.get("message")
-        raise AirflowException(f"Qlik reload {self.qlik_task_id} ended with {state.get('status')}: {reason}")
+        reason = detail or state.get("error") or state.get("message")
+        raise AirflowException(
+            f"Qlik reload {self.qlik_task_id} ended with {state.get('status')}: {reason}" + (f" | {url}" if url else "")
+        )
 
     def on_kill(self):
         if self.cancel_on_kill and self._owned and self._execution_id and self._hook:

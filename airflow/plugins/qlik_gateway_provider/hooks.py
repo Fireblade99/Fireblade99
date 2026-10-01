@@ -108,20 +108,32 @@ class QlikGatewayHook(BaseHook):
         return self._call("GET", f"/tasks/{qlik_task_id}")
 
     def start_task(
-        self, qlik_task_id: str, *, if_running: str = "fresh", dedupe: bool | None = None, meta: dict | None = None
+        self,
+        qlik_task_id: str,
+        *,
+        on_active: str | None = None,
+        if_running: str | None = None,
+        dedupe: bool | None = None,
+        meta: dict | None = None,
     ) -> dict:
-        """if_running: fresh | attach | queue | skip (an administrator may force another one in the gateway).
-        A "skip" on a busy task returns {"error": "already_running", ...}."""
-        if dedupe is not None:  # legacy argument
-            if_running = "attach" if dedupe else "queue"
+        """on_active: reuse | queue | reject | None (the gateway's default, reject); the gateway
+        administrator may force another value. A rejected start returns {"error": "already_running", ...}.
+        if_running / dedupe are the legacy names (attach=reuse, fresh/queue=queue, skip=reject)."""
+        body: dict = {"meta": meta or {}}
+        if on_active:
+            body["on_active"] = on_active
+        elif if_running:
+            body["if_running"] = if_running
+        elif dedupe is not None:
+            body["dedupe"] = dedupe
         # POST is not retried blindly: a retry after a timeout could start the task twice
-        # (the gateway dedupes by default anyway).
+        # (identical requests collapse in the gateway anyway).
         return self._call(
             "POST",
             f"/tasks/{qlik_task_id}/start",
             retries=1,
             accept_errors=("already_running",),
-            json={"if_running": if_running, "meta": meta or {}},
+            json=body,
         )
 
     def get_state(self, execution_id: int, wait: int = 0) -> dict:

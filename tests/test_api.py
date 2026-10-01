@@ -240,64 +240,71 @@ def test_other_clients_do_not_see_initiator(http, coordinator, make_client):
     assert http.get("/api/v1/executions", headers=b).json() == []  # list shows own runs only
 
 
-def test_if_running_skip_and_queue_via_api(http, coordinator, make_client):
-    _, a = make_client("team-a")
-    _, b = make_client("team-b")
-    first = http.post(f"/api/v1/tasks/{SALES}/start", headers={**a, "X-Airflow-Dag-Id": "dag_a"}).json()
-    assert first["running_execution"] is None  # the task was idle
-
-    skip = http.post(f"/api/v1/tasks/{SALES}/start", headers=b, json={"if_running": "skip"})
-    assert skip.status_code == 409 and skip.json()["error"] == "already_running"
-    run = skip.json()["running_execution"]
-    assert run["execution_id"] == first["execution_id"] and run["own"] is False and run["initiator"] == {}
-
-    queued = http.post(f"/api/v1/tasks/{SALES}/start", headers=b, json={"if_running": "queue"}).json()
-    assert queued["execution_id"] != first["execution_id"] and not queued["deduplicated"]
-    assert queued["running_execution"]["execution_id"] == first["execution_id"]
-
-    attached = http.post(f"/api/v1/tasks/{SALES}/start", headers=a).json()
-    assert attached["deduplicated"] and attached["running_execution"]["own"] is True
-    assert attached["running_execution"]["initiator"]["dag_id"] == "dag_a"
-    assert http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"if_running": "nope"}).status_code == 422
-
-
-def test_fresh_never_attaches_to_a_run_already_in_qlik(http, coordinator, make_client, mock):
+def test_requests_collapse_while_queued_and_on_active_while_reloading(http, coordinator, make_client, mock):
     mock.min_duration = mock.max_duration = 60
     _, a = make_client("team-a")
     _, b = make_client("team-b")
+    first = http.post(f"/api/v1/tasks/{SALES}/start", headers={**a, "X-Airflow-Dag-Id": "dag_a"}).json()
+    assert first["running_execution"] is None and first["url"].endswith(f"/ui/executions/{first['execution_id']}")
+    # 1. not reloading yet: every request, from any client and with any on_active, gets the same execution
+    for body in ({}, {"on_active": "reject"}, {"on_active": "queue"}, {"on_active": "reuse"}):
+        r = http.post(f"/api/v1/tasks/{SALES}/start", headers=b, json=body).json()
+        assert r["execution_id"] == first["execution_id"] and r["deduplicated"] and r["warnings"] == []
+    coordinator.tick(force=True)  # now reloading in Qlik
+
+    # 2. reject (default): 409 + reason + who/when/link of the active run
+    rej = http.post(f"/api/v1/tasks/{SALES}/start", headers=b)
+    assert rej.status_code == 409 and rej.json()["error"] == "already_running"
+    run = rej.json()["running_execution"]
+    assert (
+        run["execution_id"] == first["execution_id"]
+        and run["in_qlik"]
+        and run["url"].endswith(f"/ui/executions/{first['execution_id']}")
+    )
+    assert run["own"] is False and run["initiator"] == {}  # another client's DAG stays hidden
+
+    reuse = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"on_active": "reuse"}).json()
+    assert reuse["execution_id"] == first["execution_id"] and reuse["deduplicated"]
+    assert [w["code"] for w in reuse["warnings"]] == ["reused_active_run"]
+    assert reuse["running_execution"]["initiator"]["dag_id"] == "dag_a"  # own run: initiator visible
+
+    q1 = http.post(f"/api/v1/tasks/{SALES}/start", headers=b, json={"on_active": "queue"}).json()
+    assert q1["execution_id"] != first["execution_id"] and not q1["deduplicated"]
+    assert [w["code"] for w in q1["warnings"]] == ["queued_behind_active"]
+    # identical requests collapse into the queued run, whatever on_active they ask for
+    q2 = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"on_active": "reject"}).json()
+    assert q2["execution_id"] == q1["execution_id"] and q2["deduplicated"]
+    assert http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"on_active": "nope"}).status_code == 422
+    # a run others are waiting for cannot be cancelled by one of them
+    c = http.post(f"/api/v1/executions/{q1['execution_id']}/cancel", headers=b)
+    assert c.status_code == 409 and c.json()["error"] == "shared_execution"
+
+
+def test_legacy_if_running_values(http, coordinator, make_client, mock):
+    mock.min_duration = mock.max_duration = 60
+    _, a = make_client("team-a")
     first = http.post(f"/api/v1/tasks/{SALES}/start", headers=a).json()
-    # not sent to Qlik yet: it will read the data as of its start, attaching is safe
-    early = http.post(f"/api/v1/tasks/{SALES}/start", headers=b).json()
-    assert early["deduplicated"] and early["if_running"] == "fresh" and early["policy_source"] == "default"
-    assert early["warnings"] == []
-    coordinator.tick(force=True)  # first run is now in Qlik
-
-    late = http.post(f"/api/v1/tasks/{SALES}/start", headers=b).json()
-    assert not late["deduplicated"] and late["execution_id"] != first["execution_id"]
-    assert late["running_execution"]["execution_id"] == first["execution_id"]
-    assert late["running_execution"]["in_qlik"] is True
-    assert [w["code"] for w in late["warnings"]] == ["queued_behind_running"]
-    # a third request joins the queued (not yet started) run instead of adding one more
-    third = http.post(f"/api/v1/tasks/{SALES}/start", headers=a).json()
-    assert third["deduplicated"] and third["execution_id"] == late["execution_id"]
-
-    # explicit attach still joins the running one, but says it may miss fresh data
-    att = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"if_running": "attach"}).json()
-    assert att["execution_id"] == first["execution_id"]
-    assert [w["code"] for w in att["warnings"]] == ["attached_to_started_run"]
+    coordinator.tick(force=True)
+    r = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"if_running": "attach"}).json()
+    assert r["execution_id"] == first["execution_id"] and r["on_active"] == "reuse"
+    assert http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"if_running": "skip"}).status_code == 409
+    r = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"dedupe": False}).json()
+    assert r["on_active"] == "queue" and r["execution_id"] != first["execution_id"]
 
 
-def test_admin_forced_if_running_on_task_and_client(http, coordinator, make_client):
+def test_admin_forced_on_active_on_task_and_client(http, coordinator, make_client, mock):
+    mock.min_duration = mock.max_duration = 60
     cid, a = make_client("team-a")
     _, b = make_client("team-b")
     http.post(f"/api/v1/tasks/{SALES}/start", headers=b)
+    coordinator.tick(force=True)
     with session_scope() as db:
-        db.get(Client, cid).if_running_policy = "skip"
-    r = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"if_running": "attach"})
-    assert r.status_code == 409 and r.json()["policy_source"] == "client" and r.json()["if_running"] == "skip"
+        db.get(Client, cid).if_running_policy = "reject"
+    r = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"on_active": "reuse"})
+    assert r.status_code == 409 and r.json()["policy_source"] == "client" and r.json()["on_active"] == "reject"
 
     with session_scope() as db:
-        db.get(QlikTask, SALES).if_running_policy = "queue"  # the task wins over the client
-    r = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"if_running": "attach"}).json()
-    assert not r["deduplicated"] and r["if_running"] == "queue" and r["policy_source"] == "task"
+        db.get(QlikTask, SALES).if_running_policy = "fresh"  # legacy value = queue; the task wins
+    r = http.post(f"/api/v1/tasks/{SALES}/start", headers=a, json={"on_active": "reuse"}).json()
+    assert not r["deduplicated"] and r["on_active"] == "queue" and r["policy_source"] == "task"
     assert "policy_overridden" in [w["code"] for w in r["warnings"]]

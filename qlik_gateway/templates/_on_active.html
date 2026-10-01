@@ -1,0 +1,9 @@
+{% set policy = (policy or "")|on_active %}
+<label>Если задача уже перезагружается в Qlik (on_active)</label>
+<select name="if_running_policy" style="max-width:420px">
+<option value="" {% if not policy %}selected{% endif %}>{{ empty_label }}</option>
+<option value="reject" {% if policy == "reject" %}selected{% endif %}>reject — отказ 409 + ссылка на активный запуск</option>
+<option value="queue" {% if policy == "queue" %}selected{% endif %}>queue — новый запуск после активного (запросы схлопываются)</option>
+<option value="reuse" {% if policy == "reuse" %}selected{% endif %}>reuse — вернуть активный запуск</option>
+</select>
+<div class="muted small">{{ hint }}</div>

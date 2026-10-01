@@ -39,9 +39,12 @@ with DAG(
         task_id="reload_and_wait",
         qlik_task_id="{{ params.qlik_task_id }}",
         poll_interval=15,
-        # fresh (default): never join a reload that started before this DAG's data was ready;
-        # attach / queue / skip are the other options, see README "if_running"
-        if_running="fresh",
+        # If the task is already reloading in Qlik (started by anyone):
+        #   on_active="reject" (gateway default) - fail with a link to the active run, Airflow retries later
+        #   on_active="queue"  - reload again after it (this DAG's fresh data is guaranteed to be loaded)
+        #   on_active="reuse"  - take the result of the active run
+        # on_reject="skip" marks the task skipped instead of failing it.
+        # On failure only the script error + a link to the gateway page go to the log (push_log="full" for more).
     )
 
     start_reload = QlikReloadOperator(

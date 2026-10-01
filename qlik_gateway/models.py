@@ -14,13 +14,22 @@ def utcnow() -> datetime:
 # behalf in Qlik (post task, get state, get details, get info) plus log/stop.
 ACTIONS = ("start", "state", "details", "info", "log", "stop")
 
-# What a start request does when the same task already has an active execution.
-#   fresh  - attach only to a run that has not reached Qlik yet (it will read the data as of now),
-#            otherwise queue a new run after the current one: the caller's data is always loaded
-#   attach - attach to whatever is queued/running, even if it started before the caller's data was ready
-#   queue  - always queue a new run
-#   skip   - start nothing, answer 409 already_running
-IF_RUNNING = ("fresh", "attach", "queue", "skip")
+# Requests for a task that is waiting in the gateway queue (not sent to Qlik yet) always collapse into
+# that one execution, whoever sent them. on_active decides what happens while the task is RELOADING
+# in Qlik (the running reload reads the data as of its start):
+#   reuse  - return the active execution (it may not contain data prepared after it started)
+#   queue  - queue a run that starts after the active one; identical requests collapse into it
+#   reject - 409 already_running with the active execution (default)
+ON_ACTIVE = ("reuse", "queue", "reject")
+# values of the 0.3.x if_running parameter
+LEGACY_IF_RUNNING = {"attach": "reuse", "fresh": "queue", "queue": "queue", "skip": "reject"}
+
+
+def normalize_on_active(value: str | None) -> str | None:
+    value = (value or "").strip().lower()
+    if value in ON_ACTIVE:
+        return value
+    return LEGACY_IF_RUNNING.get(value)
 
 
 class ExecStatus:
@@ -70,7 +79,7 @@ class Client(Base):
     starts_per_hour: Mapped[int] = mapped_column(Integer, default=30)
     max_concurrent: Mapped[int] = mapped_column(Integer, default=2)
     priority: Mapped[int] = mapped_column(Integer, default=100)  # lower = dispatched first
-    # set by an administrator: overrides the if_running the client asks for (None = the client decides)
+    # set by an administrator: overrides the on_active the client asks for (None = the client decides)
     if_running_policy: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

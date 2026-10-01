@@ -118,8 +118,9 @@ def live_gateway(app, settings, mock, make_client):
         while not stop.is_set():
             coord.tick(force=True)
             # finish mock reloads quickly
-            for e in mock.executions.values():
-                e["duration"] = 0.5
+            if FAST["on"]:
+                for e in mock.executions.values():
+                    e["duration"] = 0.5
             time.sleep(0.3)
 
     threading.Thread(target=loop, daemon=True).start()
@@ -128,6 +129,9 @@ def live_gateway(app, settings, mock, make_client):
     yield
     stop.set()
     server.should_exit = True
+
+
+FAST = {"on": True}
 
 
 class _TI:
@@ -152,8 +156,12 @@ def test_operator_success_and_initiator_is_recorded(provider, live_gateway):
 
 def test_operator_fails_on_failed_reload(provider, live_gateway):
     op = provider.QlikReloadOperator(task_id="reload", qlik_task_id=RISK, poll_interval=1)
-    with pytest.raises(_AirflowException, match="FAILED"):
+    with pytest.raises(_AirflowException, match="FAILED") as err:
         op.execute({"ti": _TI()})
+    # only the script error (not the whole log) and a link to the gateway page
+    msg = str(err.value)
+    assert "Access denied for user" in msg and "LIB CONNECT" not in msg
+    assert "/ui/executions/" in msg
 
 
 def test_forbidden_task_raises(provider, live_gateway):
@@ -183,39 +191,49 @@ def test_deferrable_trigger_and_sensor(provider, live_gateway):
     assert sensor.poke({}) is True
 
 
-def test_if_running_policies(provider, live_gateway, mock):
-    for e in list(mock.executions.values()):
-        e["duration"] = 0.5
-    import time as _t
+def test_on_active_policies(provider, live_gateway, mock):
+    FAST["on"] = False
+    mock.min_duration = mock.max_duration = 60
+    try:
+        hook = provider.QlikGatewayHook()
+        ti1 = _TI()
+        provider.QlikReloadOperator(task_id="a", qlik_task_id=SALES, wait_for_completion=False).execute({"ti": ti1})
+        first = ti1.xcom["execution_id"]
+        assert ti1.xcom["execution_url"].endswith(f"/ui/executions/{first}")
+        deadline = time.monotonic() + 10
+        while hook.get_state(first)["status"] == "QUEUED" and time.monotonic() < deadline:
+            time.sleep(0.2)
+        assert hook.get_state(first)["status"] in ("STARTING", "RUNNING")
 
-    first = provider.QlikReloadOperator(task_id="a", qlik_task_id=SALES, wait_for_completion=False)
-    ti1 = _TI()
-    first.execute({"ti": ti1})
-    # the reload is queued/running now: the three policies
-    ti2 = _TI()
-    provider.QlikReloadOperator(
-        task_id="b", qlik_task_id=SALES, if_running="attach", wait_for_completion=False
-    ).execute({"ti": ti2})
-    assert ti2.xcom["execution_id"] == ti1.xcom["execution_id"] and ti2.xcom["deduplicated"] is True
-    assert ti2.xcom["running_execution"]["own"] is True and ti2.xcom["running_execution"]["initiator"]["dag_id"]
+        # reject (gateway default): fail -> Airflow retries later; the message links the active run
+        ti = _TI()
+        with pytest.raises(_AirflowException) as err:
+            provider.QlikReloadOperator(task_id="b", qlik_task_id=SALES).execute({"ti": ti})
+        assert not isinstance(err.value, _AirflowSkipException)
+        assert f"/ui/executions/{first}" in str(err.value)
+        assert ti.xcom["running_execution"]["execution_id"] == first
+        with pytest.raises(_AirflowSkipException):
+            provider.QlikReloadOperator(task_id="c", qlik_task_id=SALES, on_reject="skip").execute({"ti": _TI()})
 
-    with pytest.raises(_AirflowSkipException):
-        provider.QlikReloadOperator(task_id="c", qlik_task_id=SALES, if_running="skip").execute({"ti": _TI()})
-    # "fail" instead of "skip": Airflow retries later (retries / retry_delay)
-    ti3 = _TI()
-    with pytest.raises(_AirflowException) as err:
+        ti = _TI()
         provider.QlikReloadOperator(
-            task_id="c2", qlik_task_id=SALES, if_running="skip", on_already_running="fail"
-        ).execute({"ti": ti3})
-    assert not isinstance(err.value, _AirflowSkipException)
-    assert ti3.xcom["running_execution"]["execution_id"] == ti1.xcom["execution_id"]
-    with pytest.raises(ValueError):
-        provider.QlikReloadOperator(task_id="x", qlik_task_id=SALES, if_running="nope")
+            task_id="d", qlik_task_id=SALES, on_active="reuse", wait_for_completion=False
+        ).execute({"ti": ti})
+        assert ti.xcom["execution_id"] == first and ti.xcom["deduplicated"] is True
+        assert [w["code"] for w in ti.xcom["warnings"]] == ["reused_active_run"]
 
-    ti4 = _TI()
-    provider.QlikReloadOperator(task_id="d", qlik_task_id=SALES, if_running="queue", wait_for_completion=False).execute(
-        {"ti": ti4}
-    )
-    assert ti4.xcom["execution_id"] != ti1.xcom["execution_id"] and ti4.xcom["deduplicated"] is False
-    assert ti4.xcom["running_execution"]["execution_id"] == ti1.xcom["execution_id"]
-    _t.sleep(0)
+        q = []
+        for name in ("e", "f"):  # queue: a new run after the active one, identical requests collapse
+            ti = _TI()
+            provider.QlikReloadOperator(
+                task_id=name, qlik_task_id=SALES, on_active="queue", wait_for_completion=False
+            ).execute({"ti": ti})
+            q.append(ti.xcom["execution_id"])
+        assert q[0] == q[1] != first
+
+        with pytest.raises(ValueError):
+            provider.QlikReloadOperator(task_id="x", qlik_task_id=SALES, on_active="nope")
+        legacy = provider.QlikReloadOperator(task_id="y", qlik_task_id=SALES, if_running="attach")
+        assert legacy.on_active == "reuse"
+    finally:
+        FAST["on"] = True

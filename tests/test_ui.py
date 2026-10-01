@@ -1,6 +1,6 @@
 import re
 
-from .conftest import SALES
+from .conftest import HR, RISK, SALES
 
 
 def _login(http):
@@ -158,8 +158,8 @@ def test_formats_and_executions_page(http, coordinator, make_client):
 
     assert fmt_duration(3) == "00:00:03" and fmt_duration(3725) == "01:02:05" and fmt_duration(None) == "—"
     _, h = make_client()
-    for _ in range(3):
-        http.post(f"/api/v1/tasks/{SALES}/start", headers=h, json={"dedupe": False})
+    for t in (SALES, HR, RISK):
+        http.post(f"/api/v1/tasks/{t}/start", headers=h)
     _login(http)
     page = http.get("/ui/executions?per_page=20").text
     assert "Показано 1–3 из 3" in page and "js-range" in page

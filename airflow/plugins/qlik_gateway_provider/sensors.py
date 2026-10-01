@@ -34,5 +34,6 @@ class QlikExecutionSensor(BaseSensorOperator):
             return False
         if state["status"] != "SUCCESS":
             reason = state.get("error_detail") or state.get("error")
-            raise AirflowException(f"Qlik execution {self.execution_id} ended with {state['status']}: {reason}")
+            url = f" | {state['url']}" if state.get("url") else ""
+            raise AirflowException(f"Qlik execution {self.execution_id} ended with {state['status']}: {reason}{url}")
         return True

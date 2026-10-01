@@ -26,16 +26,33 @@ router = APIRouter(prefix="/api/v1", tags=["client API"])
 
 
 class StartRequest(BaseModel):
-    if_running: Literal["fresh", "attach", "queue", "skip"] | None = Field(
+    on_active: Literal["reuse", "queue", "reject"] | None = Field(
         None,
-        description="If the same task is already queued/running (for any client): "
-        "fresh (default) - attach only to a run not yet sent to Qlik, otherwise queue a new run after the "
-        "current one; attach - attach to whatever runs (warning if it started before this request); "
-        "queue - always a new run; skip - 409 already_running. An administrator may force it per task/client.",
+        description="What to do while the same task is RELOADING in Qlik (for any client): "
+        "reuse - return the active execution; queue - run again after it (identical requests collapse "
+        "into one queued run); reject - 409 already_running with the active execution (default). "
+        "A run still waiting in the gateway queue is always shared. An administrator may force the value "
+        "per task/client.",
     )
-    dedupe: bool | None = Field(None, description="Legacy: true = if_running=attach, false = if_running=queue")
+    if_running: str | None = Field(None, description="Legacy (0.3.x): attach=reuse, fresh/queue=queue, skip=reject")
+    dedupe: bool | None = Field(None, description="Legacy: true = reuse, false = queue")
     priority: int | None = Field(None, description="Lower is sooner; cannot be better than the client's priority")
     meta: dict = Field(default_factory=dict, description="Free-form initiator metadata stored with the execution")
+
+    def requested_on_active(self) -> str | None:
+        if self.on_active:
+            return self.on_active
+        if self.if_running:
+            return self.if_running
+        if self.dedupe is not None:
+            return "reuse" if self.dedupe else "queue"
+        return None
+
+
+def execution_url(request: Request, execution_id: int) -> str:
+    """Link to the execution page of the gateway UI (details, script error, log)."""
+    base = get_settings().public_url or str(request.base_url)
+    return f"{base.rstrip('/')}/ui/executions/{execution_id}"
 
 
 def task_to_dict(t: QlikTask) -> dict:
@@ -168,34 +185,35 @@ def start_task(
         initiator=initiator,
         caller_ip=client_ip(request),
         priority=body.priority,
-        dedupe=body.dedupe,
-        if_running=body.if_running,
-        running_info=lambda e: running_info(e, client),
+        on_active=body.requested_on_active(),
+        running_info=lambda e: running_info(e, client, request),
     )
     ex = res.execution
     db.commit()  # the caller must be able to read the execution as soon as it gets the id
     request.state.audit.update(
         execution_id=ex.id,
         message=("deduplicated" if res.deduplicated else "queued")
-        + f" (if_running={res.if_running} from {res.source})"
+        + f" (on_active={res.on_active} from {res.source})"
         + "".join(f"; {w['code']}" for w in res.warnings),
     )
     out = exec_state(ex)
+    out["url"] = execution_url(request, ex.id)
     out["deduplicated"] = res.deduplicated
-    out["if_running"] = res.if_running
-    out["if_running_requested"] = res.requested
+    out["on_active"] = res.on_active
+    out["on_active_requested"] = res.requested
     out["policy_source"] = res.source
     out["warnings"] = res.warnings
-    # the run this request attached to / is queued behind (None if the task was idle)
-    out["running_execution"] = running_info(res.running, client) if res.running is not None else None
+    # the execution this request collapsed into / reused / is queued behind (None if the task was idle)
+    out["running_execution"] = running_info(res.running, client, request) if res.running is not None else None
     return out
 
 
-def running_info(ex: Execution, viewer: Client) -> dict:
+def running_info(ex: Execution, viewer: Client, request: Request) -> dict:
     """Who/when of a run of the same task; the initiator is shown only to its own client."""
     own = ex.client_id == viewer.id
     return {
         "execution_id": ex.id,
+        "url": execution_url(request, ex.id),
         "status": ex.status,
         "own": own,
         "client": ex.client.name if own else None,
@@ -240,7 +258,9 @@ async def execution_state(
     def load() -> dict:
         with session_scope() as db:
             c = db.get(Client, client.id)
-            return exec_state(_load_execution(db, c, execution_id, request))
+            return exec_state(_load_execution(db, c, execution_id, request)) | {
+                "url": execution_url(request, execution_id)
+            }
 
     state = await run_in_threadpool(load)
     deadline = time.monotonic() + min(wait, get_settings().long_poll_max_seconds)
@@ -256,7 +276,9 @@ def execution_details(
 ):
     request.state.audit["action"] = "details"
     svc.require_action(client, "details")
-    return exec_details(_load_execution(db, client, execution_id, request), client)
+    d = exec_details(_load_execution(db, client, execution_id, request), client)
+    d["url"] = execution_url(request, execution_id)
+    return d
 
 
 @router.get("/executions/{execution_id}/log", summary="Qlik script log of a finished execution")
@@ -290,6 +312,13 @@ def execution_cancel(
     request.state.audit["action"] = "stop"
     svc.require_action(client, "stop")
     ex = _load_execution(db, client, execution_id, request)
+    if ex.client_id != client.id:
+        raise ServiceError(403, "not_owner", "Only the client that started the execution may cancel it")
+    if ex.dedup_hits:
+        # other requests (maybe other clients) were collapsed into this run and are waiting for it
+        raise ServiceError(
+            409, "shared_execution", f"Execution {ex.id} is shared by {ex.dedup_hits} other request(s); not cancelled"
+        )
     try:
         svc.cancel(db, backend, ex, actor_type="client", actor=client.name)
     except QlikError as e:

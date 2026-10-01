@@ -16,7 +16,6 @@ from ..config import get_settings
 from ..db import get_db
 from ..models import (
     ACTIONS,
-    IF_RUNNING,
     AdminUser,
     AuditLog,
     Client,
@@ -24,6 +23,7 @@ from ..models import (
     Execution,
     NodeHealth,
     QlikTask,
+    normalize_on_active,
     utcnow,
 )
 from ..qlik import QlikError
@@ -73,6 +73,7 @@ def tz_label() -> str:
 
 
 templates.env.filters["dt"] = lambda d: to_local(d).strftime("%d.%m.%Y %H:%M:%S") if d else "—"
+templates.env.filters["on_active"] = lambda v: normalize_on_active(v) or ""
 templates.env.filters["dt_input"] = lambda d: to_local(d).strftime("%Y-%m-%dT%H:%M") if d else ""
 templates.env.globals["tz_label"] = tz_label
 templates.env.globals["app_version"] = __version__  # cache-busting for static files
@@ -442,8 +443,7 @@ def _all_tasks(db: Session):
 
 
 def _policy(v) -> str | None:
-    v = str(v or "").strip()
-    return v if v in IF_RUNNING else None
+    return normalize_on_active(str(v or ""))
 
 
 def _apply_client_form(c: Client, form) -> None:
@@ -527,7 +527,7 @@ def _client_snapshot(c: Client) -> dict:
         "sph": c.starts_per_hour,
         "conc": c.max_concurrent,
         "prio": c.priority,
-        "if_running": c.if_running_policy,
+        "on_active": c.if_running_policy,
     }
 
 
@@ -662,7 +662,7 @@ def task_update(
             "blocked": t.blocked,
             "reason": t.blocked_reason,
             "min_interval": t.min_interval_seconds,
-            "if_running": t.if_running_policy,
+            "on_active": t.if_running_policy,
         },
     )
     flash(request, f"Задача «{t.name}» сохранена")

@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import Settings, get_settings
-from ..models import IF_RUNNING, Client, ExecStatus, Execution, NodeHealth, QlikTask, utcnow
+from ..models import ON_ACTIVE, Client, ExecStatus, Execution, NodeHealth, QlikTask, normalize_on_active, utcnow
 from ..qlik import QlikBackend, QlikError, map_qlik_status
 from . import runtime
 from .audit import audit
@@ -81,23 +81,23 @@ def queued_execution_for_task(db: Session, task_id: str) -> Execution | None:
 @dataclass
 class SubmitResult:
     execution: Execution | None = None
-    deduplicated: bool = False
-    if_running: str = "fresh"  # the policy actually applied
+    deduplicated: bool = False  # the request was collapsed into an existing execution
+    on_active: str = "reject"  # the policy actually applied
     requested: str | None = None  # what the client asked for
     source: str = "default"  # where the applied policy came from: request / default / client / task
-    running: Execution | None = None  # the run attached to / queued behind
+    running: Execution | None = None  # the active execution (collapsed into / reused / queued behind)
     warnings: list[dict] = field(default_factory=list)
 
 
-def resolve_if_running(client: Client, task: QlikTask, requested: str | None) -> tuple[str, str]:
+def resolve_on_active(client: Client, task: QlikTask, requested: str | None) -> tuple[str, str]:
     """An administrator's setting on the task wins over the one on the client, which wins over the request."""
-    if task.if_running_policy in IF_RUNNING:
-        return task.if_running_policy, "task"
-    if client.if_running_policy in IF_RUNNING:
-        return client.if_running_policy, "client"
+    if normalize_on_active(task.if_running_policy):
+        return normalize_on_active(task.if_running_policy), "task"
+    if normalize_on_active(client.if_running_policy):
+        return normalize_on_active(client.if_running_policy), "client"
     if requested:
         return requested, "request"
-    return get_settings().default_if_running, "default"
+    return get_settings().default_on_active, "default"
 
 
 def submit(
@@ -108,26 +108,23 @@ def submit(
     initiator: dict,
     caller_ip: str | None,
     priority: int | None = None,
-    dedupe: bool | None = None,
-    if_running: str | None = None,
+    on_active: str | None = None,
     running_info=None,
 ) -> SubmitResult:
     """Accept a start request.
 
-    if_running - what to do when the same task is already queued/running (for any client):
-      "fresh"  - (default) attach only to a run that has not been sent to Qlik yet; if the task is
-                 already running in Qlik, queue a new run after it, so data prepared before this
-                 request is guaranteed to be loaded
-      "attach" - attach to whatever is queued/running (a warning is returned if that run started
-                 in Qlik before this request: it may not see the caller's latest data)
-      "queue"  - always queue a new execution that starts after the current one finishes
-      "skip"   - start nothing, answer 409 "already_running" with the running execution
-    An administrator may force the policy per task or per client; the response says which one applied.
-    Legacy dedupe=true/false means attach/queue.
+    1. The task is not reloading and a run of it is waiting in the gateway queue: the request
+       collapses into that run, whoever sent it (one execution id for everybody).
+    2. The task is reloading in Qlik - on_active (for any client and initiator of the active run):
+       "reuse"  - return the active execution (warning: it may not contain data prepared after it started)
+       "queue"  - queue a run that starts after the active one; identical requests collapse into it (1.)
+       "reject" - 409 already_running with the reason and the active execution (default)
+    An administrator may force on_active per task or per client; the answer says which one applied.
+    Legacy if_running values (attach/fresh/queue/skip) are accepted.
     """
-    requested = if_running or ({True: "attach", False: "queue"}.get(dedupe) if dedupe is not None else None)
-    if requested is not None and requested not in IF_RUNNING:
-        raise ServiceError(422, "bad_if_running", "if_running must be one of: " + ", ".join(IF_RUNNING))
+    requested = normalize_on_active(on_active) if on_active else None
+    if on_active and requested is None:
+        raise ServiceError(422, "bad_on_active", "on_active must be one of: " + ", ".join(ON_ACTIVE))
     require_action(client, "start")
     task = require_task(db, client, task_id)
 
@@ -136,47 +133,53 @@ def submit(
     if not task.enabled_in_qlik:
         raise ServiceError(409, "task_disabled", "Task is disabled in Qlik")
 
-    policy, source = resolve_if_running(client, task, requested)
-    result = SubmitResult(if_running=policy, requested=requested, source=source)
+    policy, source = resolve_on_active(client, task, requested)
+    result = SubmitResult(on_active=policy, requested=requested, source=source)
     if requested and policy != requested:
         result.warnings.append(
             {
                 "code": "policy_overridden",
-                "message": f"if_running={requested} was replaced by {policy}, set by the administrator on the {source}",
+                "message": f"on_active={requested} was replaced by {policy}, set by the administrator on the {source}",
             }
         )
 
-    running = active_execution_for_task(db, task_id)
-    if running is not None:
-        target = None
-        if policy == "attach":
-            target = running
-        elif policy == "fresh":
-            target = queued_execution_for_task(db, task_id)
-        if target is not None:
-            target.dedup_hits += 1
-            result.execution, result.deduplicated, result.running = target, True, target
-            if target.status in ExecStatus.IN_QLIK:
-                since = f" at {target.qlik_started_at:%Y-%m-%d %H:%M:%S} UTC" if target.qlik_started_at else ""
-                result.warnings.append(
-                    {
-                        "code": "attached_to_started_run",
-                        "message": f"Attached to execution {target.id}, which was already sent to Qlik{since}, "
-                        "before this request: data prepared after that may not be loaded by it",
-                    }
-                )
+    # 1. a run that has not reached Qlik yet reads the data as of its start: everybody shares it
+    waiting = queued_execution_for_task(db, task_id)
+    if waiting is not None:
+        waiting.dedup_hits += 1
+        result.execution, result.deduplicated, result.running = waiting, True, waiting
+        return result
+
+    # 2. the task is reloading in Qlik
+    active = active_execution_for_task(db, task_id)
+    if active is not None:
+        if policy == "reuse":
+            active.dedup_hits += 1
+            result.execution, result.deduplicated, result.running = active, True, active
+            since = f" at {active.qlik_started_at:%Y-%m-%d %H:%M:%S} UTC" if active.qlik_started_at else ""
+            result.warnings.append(
+                {
+                    "code": "reused_active_run",
+                    "message": f"Returned execution {active.id}, which was already reloading in Qlik{since}, "
+                    "before this request: data prepared after that may not be loaded by it",
+                }
+            )
             return result
-        if policy == "skip":
+        if policy == "reject":
             raise ServiceError(
                 409,
                 "already_running",
-                f"Task is already {running.status.lower()} (execution {running.id}); nothing was started",
+                f"Task is already {active.status.lower()} in Qlik (execution {active.id}); nothing was started. "
+                "Wait for it and retry, or ask with on_active=queue / reuse",
                 {
-                    "if_running": policy,
+                    "on_active": policy,
                     "policy_source": source,
-                    "running_execution": running_info(running) if running_info else {"execution_id": running.id},
+                    "running_execution": running_info(active) if running_info else {"execution_id": active.id},
                 },
             )
+        running = active  # queue: a new run after the active one
+    else:
+        running = None
 
     now = utcnow()
     starts_last_hour = db.scalar(
@@ -213,8 +216,8 @@ def submit(
         result.running = running
         result.warnings.append(
             {
-                "code": "queued_behind_running",
-                "message": f"Task is already {running.status.lower()} (execution {running.id}); "
+                "code": "queued_behind_active",
+                "message": f"Task is already {running.status.lower()} in Qlik (execution {running.id}); "
                 f"execution {execution.id} will start after it finishes",
             }
         )
