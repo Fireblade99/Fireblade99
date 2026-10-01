@@ -63,6 +63,7 @@ powershell -ExecutionPolicy Bypass -File deploy\windows\install.ps1 `
 | Сменить пароль admin | `C:\qgw\manage.cmd create-admin admin` |
 | Статус задач | `Get-ScheduledTask QlikGateway-*` или Планировщик заданий |
 | Обновить версию | распаковать новый архив поверх `C:\qlik-gateway` и выполнить `deploy\windows\update.ps1 -IndexUrl <nexus>`: обновляется только код шлюза, `.env`, база, Python и Postgres не трогаются |
+| Проверить схлопывание запросов (on_active) | `deploy\windows\test-on-active.ps1 -Gateway http://localhost:8080 -TokenA <токен 1> -TokenB <токен 2> -TaskId <тестовая задача>`: шлёт запросы от двух клиентов и проверяет reuse / queue / reject; задача перезагрузится дважды |
 | Удалить | `deploy\windows\uninstall.ps1`: задачи и правило брандмауэра удаляются, данные остаются |
 
 ## Переход на настоящий Qlik
