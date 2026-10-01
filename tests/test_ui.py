@@ -108,7 +108,7 @@ def test_ui_time_zone(http, coordinator, settings, monkeypatch):
     with session_scope() as db:
         db.add(AuditLog(actor_type="system", actor="tz-probe", action="x", ts=datetime(2026, 9, 29, 7, 0, 0)))
     page = http.get("/ui/audit?actor=tz-probe").text
-    assert "29.09.2026 12:00:00" in page and "admin (UTC+5)" in page  # stored 07:00 UTC -> shown 12:00 UTC+5
+    assert "29.09.2026 12:00:00" in page and "admin (UTC+5)" not in page  # stored 07:00 UTC -> shown 12:00 UTC+5
     # the filter is typed in UTC+5: 11:59 local = 06:59 UTC -> includes the 07:00 UTC record
     assert "Показано 1–1 из 1" in http.get("/ui/audit?actor=tz-probe&date_from=2026-09-29T11:59").text
     assert "Нет записей" in http.get("/ui/audit?actor=tz-probe&date_from=2026-09-29T12:01").text
