@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Создаёт в Grafana правила алертинга, которые ходят напрямую в Postgres.
 
@@ -18,6 +18,18 @@
     .\Import-PgSqlAlerts.ps1 -GrafanaUrl http://grafana:3000 -Token glsa_xxx -DryRun
     .\Import-PgSqlAlerts.ps1 -GrafanaUrl http://grafana:3000 -Token glsa_xxx
 #>
+# ---------------------------------------------------------------------
+# ФАЙЛ ОБЯЗАН ХРАНИТЬСЯ В UTF-8 С BOM.
+#
+# Windows PowerShell 5.1 читает .ps1 в системной кодировке (у нас
+# cp1251), если в начале файла нет метки BOM. Кириллица тогда
+# превращается в "РЎРµСЃСЃРёРё", и скрипт падает на разборе ещё до
+# запуска. PowerShell 7 читает UTF-8 и без BOM, но рассчитывать на
+# него нельзя.
+#
+# Если правишь файл: Блокнот -> Сохранить как -> "UTF-8 с BOM",
+# VS Code -> в правом нижнем углу выбрать "UTF-8 with BOM".
+# ---------------------------------------------------------------------
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string] $GrafanaUrl,
@@ -30,13 +42,34 @@ param(
 $ErrorActionPreference = 'Stop'
 $GrafanaUrl = $GrafanaUrl.TrimEnd('/')
 
+# Чтобы русские сообщения в консоли не превратились в кракозябры.
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+
+# Тело запроса отправляется БАЙТАМИ, а не строкой.
+#
+# Windows PowerShell 5.1, получив строку, кодирует её по умолчанию не в
+# UTF-8 — и названия правил с текстами уведомлений приезжают в Grafana
+# искажёнными. Снаружи это выглядит как успешно созданные правила с
+# нечитаемыми именами, то есть ошибка молчаливая.
+function Invoke-Api {
+    param($Method, $Uri, $Obj)
+    # Имя $req, а не $args: $args — автоматическая переменная PowerShell,
+    # перезаписывать её внутри функции чревато неожиданностями.
+    $req = @{ Headers = $headers; Method = $Method; Uri = $Uri }
+    if ($null -ne $Obj) {
+        $json = $Obj | ConvertTo-Json -Depth 20 -Compress
+        $req.Body = [System.Text.Encoding]::UTF8.GetBytes($json)
+    }
+    Invoke-RestMethod @req
+}
+
 function Step { param($m) Write-Host "==> $m" -ForegroundColor Green }
 function Warn { param($m) Write-Host "    $m" -ForegroundColor Yellow }
 function Die  { param($m) Write-Host "ОШИБКА: $m" -ForegroundColor Red; exit 1 }
 
 $headers = @{
     Authorization          = "Bearer $Token"
-    'Content-Type'         = 'application/json'
+    'Content-Type'         = 'application/json; charset=utf-8'
     # Без этого правила станут «только для чтения» и в интерфейсе их
     # нельзя будет поправить — ни порог, ни контакт-поинт.
     'X-Disable-Provenance' = 'true'
@@ -213,7 +246,7 @@ function New-RuleBody {
 Step "Grafana: $GrafanaUrl"
 
 try {
-    $folders = Invoke-RestMethod -Headers $headers -Method Get -Uri "$GrafanaUrl/api/folders"
+    $folders = Invoke-Api -Method Get -Uri "$GrafanaUrl/api/folders"
 } catch {
     Die "не отвечает API или не принят токен: $($_.Exception.Message)"
 }
@@ -225,8 +258,7 @@ if (-not $f) {
         $folderUid = '<новая-папка>'
     } else {
         Step "создаю папку '$Folder'"
-        $f = Invoke-RestMethod -Headers $headers -Method Post -Uri "$GrafanaUrl/api/folders" `
-                               -Body (@{ title = $Folder } | ConvertTo-Json)
+        $f = Invoke-Api -Method Post -Uri "$GrafanaUrl/api/folders" -Obj @{ title = $Folder }
         $folderUid = $f.uid
     }
 } else {
@@ -237,7 +269,7 @@ if (-not $f) {
 # Что уже есть — чтобы повторный запуск не наплодил дублей.
 $existing = @{}
 try {
-    foreach ($r in (Invoke-RestMethod -Headers $headers -Method Get -Uri "$GrafanaUrl/api/v1/provisioning/alert-rules")) {
+    foreach ($r in (Invoke-Api -Method Get -Uri "$GrafanaUrl/api/v1/provisioning/alert-rules")) {
         if ($r.folderUID -eq $folderUid) { $existing["$($r.ruleGroup)/$($r.title)"] = $true }
     }
 } catch {
@@ -269,9 +301,7 @@ foreach ($h in $hosts) {
         }
 
         try {
-            Invoke-RestMethod -Headers $headers -Method Post `
-                -Uri "$GrafanaUrl/api/v1/provisioning/alert-rules" `
-                -Body ($body | ConvertTo-Json -Depth 20 -Compress) | Out-Null
+            Invoke-Api -Method Post -Uri "$GrafanaUrl/api/v1/provisioning/alert-rules" -Obj $body | Out-Null
             Step "создано: $($h.Name) / $($c.Title), порог $thr"
             $made++
         } catch {
@@ -287,9 +317,8 @@ foreach ($h in $hosts) {
     # правила он не задаётся, и группа осталась бы на умолчании.
     if (-not $DryRun) {
         try {
-            Invoke-RestMethod -Headers $headers -Method Put `
-                -Uri "$GrafanaUrl/api/v1/provisioning/folder/$folderUid/rule-groups/$group" `
-                -Body (@{ title = $group; folderUid = $folderUid; interval = 60 } | ConvertTo-Json) | Out-Null
+            Invoke-Api -Method Put -Uri "$GrafanaUrl/api/v1/provisioning/folder/$folderUid/rule-groups/$group" `
+                       -Obj @{ title = $group; folderUid = $folderUid; interval = 60 } | Out-Null
         } catch {
             Warn "интервал группы $group не выставлен, проверь его в интерфейсе"
         }
