@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Разворачивает Prometheus на Windows-ноде для сбора метрик Postgres.
 

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Ставит pg-probe (и по желанию Prometheus) как службы Windows.
 
