@@ -3,15 +3,18 @@
     Creates Grafana alert rules that query PostgreSQL directly.
 
 .DESCRIPTION
-    This file is deliberately pure ASCII. All Russian text, all SQL and all
-    thresholds live in pg-sql-alerts.json next to it, and that file is read
-    with an explicitly specified UTF-8 encoding.
+    Two deliberate constraints keep this file runnable on Windows
+    PowerShell 5.1, which is stricter than PowerShell 7:
 
-    Reason: Windows PowerShell 5.1 reads .ps1 in the system ANSI codepage
-    unless the file carries a BOM, and a BOM is easily lost by a download,
-    an editor or an antivirus. Keeping the script ASCII removes that whole
-    class of failure - the script cannot be mis-decoded, and the data file
-    is never decoded by PowerShell's file reader at all.
+    1. Pure ASCII. All Russian text, all SQL and all thresholds live in
+       pg-sql-alerts.json next to this file, read with an explicitly
+       specified UTF-8 encoding. A .ps1 without a BOM is decoded in the
+       system codepage by 5.1, and a BOM is easily lost in transit, so
+       the script simply contains nothing that could be mis-decoded.
+
+    2. No multi-line hash literals, no here-strings, no backtick line
+       continuations. Every structure is assembled key by key. Verbose,
+       but it parses the same way on every version.
 
 .EXAMPLE
     .\Import-PgSqlAlerts.ps1 -GrafanaUrl http://grafana:3000 -Token glsa_xxx -DryRun
@@ -41,9 +44,8 @@ function Die  { param($m) Write-Host "ERROR: $m" -ForegroundColor Red; exit 1 }
 # Load the data file.
 #
 # ReadAllText with an explicit encoding, not Get-Content: Get-Content
-# would fall back to the system codepage, which is exactly what we are
-# avoiding. A stray BOM is trimmed by hand because .NET may leave it in
-# the first character.
+# would fall back to the system codepage, which is what we are avoiding.
+# A stray BOM is trimmed by hand because .NET may leave it in place.
 # ---------------------------------------------------------------------
 if (-not $Config) { $Config = Join-Path $PSScriptRoot 'pg-sql-alerts.json' }
 if (-not (Test-Path $Config)) { Die "data file not found: $Config" }
@@ -59,104 +61,132 @@ try {
 if (-not $Folder)       { $Folder       = $cfg.folder }
 if (-not $ContactPoint) { $ContactPoint = $cfg.contactPoint }
 
-$headers = @{
-    Authorization          = "Bearer $Token"
-    'Content-Type'         = 'application/json; charset=utf-8'
-    # Without this header Grafana marks the rules as externally provisioned
-    # and refuses to let anyone edit them in the UI.
-    'X-Disable-Provenance' = 'true'
-}
+$headers = @{}
+$headers['Authorization'] = "Bearer $Token"
+$headers['Content-Type']  = 'application/json; charset=utf-8'
+# Without this header Grafana marks the rules as externally provisioned
+# and refuses to let anyone edit them in the UI.
+$headers['X-Disable-Provenance'] = 'true'
 
-# The request body is sent as BYTES, not as a string. Windows PowerShell 5.1
-# encodes a string body with a non-UTF-8 default, which would silently turn
-# the Russian rule titles into garbage inside Grafana.
+# The request body is sent as BYTES, not as a string. Windows PowerShell
+# 5.1 encodes a string body with a non-UTF-8 default, which would turn
+# the Russian rule titles into garbage inside Grafana without any error.
 function Invoke-Api {
     param($Method, $Uri, $Obj)
-    $req = @{ Headers = $headers; Method = $Method; Uri = $Uri }
+    $req = @{}
+    $req['Headers'] = $headers
+    $req['Method']  = $Method
+    $req['Uri']     = $Uri
     if ($null -ne $Obj) {
         $json = $Obj | ConvertTo-Json -Depth 20 -Compress
-        $req.Body = [System.Text.Encoding]::UTF8.GetBytes($json)
+        $req['Body'] = [System.Text.Encoding]::UTF8.GetBytes($json)
     }
     Invoke-RestMethod @req
 }
 
+function New-Expr {
+    param($RefId, $Type, $Source, $Threshold)
+
+    $ds = @{}
+    $ds['type'] = '__expr__'
+    $ds['uid']  = '__expr__'
+
+    $model = @{}
+    $model['datasource']    = $ds
+    $model['expression']    = $Source
+    $model['intervalMs']    = 1000
+    $model['maxDataPoints'] = 43200
+    $model['refId']         = $RefId
+    $model['type']          = $Type
+
+    if ($Type -eq 'reduce') {
+        $model['reducer'] = 'last'
+    } else {
+        $ev = @{}
+        $ev['params'] = @($Threshold)
+        $ev['type']   = 'gt'
+
+        $cond = @{}
+        $cond['evaluator'] = $ev
+        $cond['operator']  = @{ type = 'and' }
+        $cond['query']     = @{ params = @($RefId) }
+        $cond['reducer']   = @{ params = @(); type = 'last' }
+        $cond['type']      = 'query'
+
+        $model['conditions'] = @($cond)
+    }
+
+    $node = @{}
+    $node['refId']         = $RefId
+    $node['queryType']     = 'expression'
+    $node['datasourceUid'] = '__expr__'
+    $node['model']         = $model
+    return $node
+}
+
+function New-SqlQuery {
+    param($DsUid, $Sql)
+
+    $ds = @{}
+    $ds['type'] = 'grafana-postgresql-datasource'
+    $ds['uid']  = $DsUid
+
+    $model = @{}
+    $model['datasource']    = $ds
+    $model['editorMode']    = 'code'
+    $model['format']        = 'table'
+    $model['instant']       = $true
+    $model['intervalMs']    = 1000
+    $model['maxDataPoints'] = 43200
+    $model['rawQuery']      = $true
+    $model['rawSql']        = $Sql
+    $model['refId']         = 'A'
+
+    $range = @{}
+    $range['from'] = 600
+    $range['to']   = 0
+
+    $node = @{}
+    $node['refId']             = 'A'
+    $node['relativeTimeRange'] = $range
+    $node['datasourceUid']     = $DsUid
+    $node['model']             = $model
+    return $node
+}
+
 function New-RuleBody {
     param($Title, $Group, $FolderUid, $DsUid, $Sql, $Summary, $Threshold, $HostName)
-    @{
-        title        = $Title
-        ruleGroup    = $Group
-        folderUID    = $FolderUid
-        condition    = 'C'
-        for          = '0s'        # a transaction age only grows, nothing to debounce
-        noDataState  = 'OK'        # no hung transactions is silence, not breakage
-        execErrState = 'Alerting'  # losing the database connection must be audible
-        labels       = @{
-            pg_group    = $cfg.pgGroup
-            pg_instance = $HostName
-            severity    = $cfg.severity
-        }
-        annotations           = @{ summary = $Summary }
-        notification_settings = @{ receiver = $ContactPoint }
-        data = @(
-            @{
-                refId             = 'A'
-                relativeTimeRange = @{ from = 600; to = 0 }
-                datasourceUid     = $DsUid
-                model = @{
-                    datasource    = @{ type = 'grafana-postgresql-datasource'; uid = $DsUid }
-                    editorMode    = 'code'
-                    format        = 'table'
-                    instant       = $true
-                    intervalMs    = 1000
-                    maxDataPoints = 43200
-                    rawQuery      = $true
-                    rawSql        = $Sql
-                    refId         = 'A'
-                }
-            },
-            @{
-                refId         = 'B'
-                queryType     = 'expression'
-                datasourceUid = '__expr__'
-                model = @{
-                    datasource    = @{ type = '__expr__'; uid = '__expr__' }
-                    expression    = 'A'
-                    intervalMs    = 1000
-                    maxDataPoints = 43200
-                    reducer       = 'last'
-                    refId         = 'B'
-                    type          = 'reduce'
-                }
-            },
-            @{
-                refId         = 'C'
-                queryType     = 'expression'
-                datasourceUid = '__expr__'
-                model = @{
-                    conditions = @(@{
-                        evaluator = @{ params = @($Threshold); type = 'gt' }
-                        operator  = @{ type = 'and' }
-                        query     = @{ params = @('C') }
-                        reducer   = @{ params = @(); type = 'last' }
-                        type      = 'query'
-                    })
-                    datasource    = @{ type = '__expr__'; uid = '__expr__' }
-                    expression    = 'B'
-                    intervalMs    = 1000
-                    maxDataPoints = 43200
-                    refId         = 'C'
-                    type          = 'threshold'
-                }
-            }
-        )
-    }
+
+    $labels = @{}
+    $labels['pg_group']    = $cfg.pgGroup
+    $labels['pg_instance'] = $HostName
+    $labels['severity']    = $cfg.severity
+
+    $body = @{}
+    $body['title']        = $Title
+    $body['ruleGroup']    = $Group
+    $body['folderUID']    = $FolderUid
+    $body['condition']    = 'C'
+    $body['for']          = '0s'        # a transaction age only grows, nothing to debounce
+    $body['noDataState']  = 'OK'        # no hung transactions is silence, not breakage
+    $body['execErrState'] = 'Alerting'  # losing the database connection must be audible
+    $body['labels']       = $labels
+    $body['annotations']  = @{ summary = $Summary }
+    $body['notification_settings'] = @{ receiver = $ContactPoint }
+
+    $a = New-SqlQuery -DsUid $DsUid -Sql $Sql
+    $b = New-Expr -RefId 'B' -Type 'reduce' -Source 'A'
+    $c = New-Expr -RefId 'C' -Type 'threshold' -Source 'B' -Threshold $Threshold
+
+    $body['data'] = @($a, $b, $c)
+    return $body
 }
 
 # ---------------------------------------------------------------------
+$total = $cfg.hosts.Count * $cfg.checks.Count
 Step "Grafana: $GrafanaUrl"
 Step "data file: $Config"
-Step ("hosts: " + $cfg.hosts.Count + ", checks: " + $cfg.checks.Count +
-      ", rules to make: " + ($cfg.hosts.Count * $cfg.checks.Count))
+Step "hosts: $($cfg.hosts.Count), checks: $($cfg.checks.Count), rules to make: $total"
 
 try {
     $folders = Invoke-Api -Method Get -Uri "$GrafanaUrl/api/folders"
@@ -182,19 +212,24 @@ if (-not $f) {
 # What already exists, so a repeat run does not create duplicates.
 $existing = @{}
 try {
-    foreach ($r in (Invoke-Api -Method Get -Uri "$GrafanaUrl/api/v1/provisioning/alert-rules")) {
+    $all = Invoke-Api -Method Get -Uri "$GrafanaUrl/api/v1/provisioning/alert-rules"
+    foreach ($r in $all) {
         if ($r.folderUID -eq $folderUid) { $existing["$($r.ruleGroup)/$($r.title)"] = $true }
     }
 } catch {
     Warn "could not list existing rules, duplicate check skipped"
 }
 
-$made = 0; $skipped = 0; $failed = 0
+$made = 0
+$skipped = 0
+$failed = 0
 
 foreach ($h in $cfg.hosts) {
     $group = $cfg.groupPrefix + $h.name
+
     foreach ($c in $cfg.checks) {
-        $thr = if ($null -ne $c.threshold) { $c.threshold } else { $h.longTxSec }
+        $thr = $c.threshold
+        if ($null -eq $thr) { $thr = $h.longTxSec }
         $key = "$group/$($c.title)"
 
         if ($existing.ContainsKey($key)) {
@@ -203,9 +238,7 @@ foreach ($h in $cfg.hosts) {
             continue
         }
 
-        $body = New-RuleBody -Title $c.title -Group $group -FolderUid $folderUid `
-                             -DsUid $h.ds -Sql $c.sql -Summary $c.summary `
-                             -Threshold $thr -HostName $h.name
+        $body = New-RuleBody -Title $c.title -Group $group -FolderUid $folderUid -DsUid $h.ds -Sql $c.sql -Summary $c.summary -Threshold $thr -HostName $h.name
 
         if ($DryRun) {
             Step "[dry run] $($h.name) / $($c.title), threshold $thr"
@@ -229,10 +262,12 @@ foreach ($h in $cfg.hosts) {
     # Group evaluation interval. A separate call: creating a rule does not
     # set it, and the group would stay on the default.
     if (-not $DryRun) {
+        $gi = @{}
+        $gi['title']     = $group
+        $gi['folderUid'] = $folderUid
+        $gi['interval']  = $cfg.evalIntervalSec
         try {
-            Invoke-Api -Method Put `
-                -Uri "$GrafanaUrl/api/v1/provisioning/folder/$folderUid/rule-groups/$group" `
-                -Obj @{ title = $group; folderUid = $folderUid; interval = $cfg.evalIntervalSec } | Out-Null
+            Invoke-Api -Method Put -Uri "$GrafanaUrl/api/v1/provisioning/folder/$folderUid/rule-groups/$group" -Obj $gi | Out-Null
         } catch {
             Warn "evaluation interval not set for group $group, check it in the UI"
         }
