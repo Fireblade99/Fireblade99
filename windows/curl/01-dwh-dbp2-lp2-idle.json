@@ -1,0 +1,100 @@
+{
+  "title": "ЗависшаяIdleInTransaction",
+  "ruleGroup": "pg-prod-dp-dwh-dbp2-lp2",
+  "folderUID": "dfqsba5oqdgqof",
+  "condition": "C",
+  "for": "0s",
+  "noDataState": "OK",
+  "execErrState": "Alerting",
+  "labels": {
+    "pg_group": "prod-dp",
+    "pg_instance": "dwh-dbp2-lp2",
+    "severity": "warning"
+  },
+  "annotations": {
+    "summary": "pid {{ $labels.pid }} · {{ $labels.usename }} / {{ $labels.app }} · база {{ $labels.datname }}\n{{ $labels.query }}"
+  },
+  "notification_settings": {
+    "receiver": "telegram-db-dponline"
+  },
+  "data": [
+    {
+      "refId": "A",
+      "relativeTimeRange": {
+        "from": 600,
+        "to": 0
+      },
+      "datasourceUid": "fg005dyg7prswd",
+      "model": {
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "fg005dyg7prswd"
+        },
+        "editorMode": "code",
+        "format": "table",
+        "instant": true,
+        "intervalMs": 1000,
+        "maxDataPoints": 43200,
+        "rawQuery": true,
+        "rawSql": "SELECT\n  pid::text                                           AS pid,\n  usename                                             AS usename,\n  coalesce(nullif(application_name,''),'-')           AS app,\n  datname                                             AS datname,\n  left(regexp_replace(query, E'\\\\s+', ' ', 'g'), 200) AS query,\n  EXTRACT(EPOCH FROM (now() - state_change))::float8  AS seconds\nFROM pg_stat_activity\nWHERE backend_type = 'client backend'\n  AND state LIKE 'idle in transaction%'\n  AND now() - state_change > interval '30 seconds'",
+        "refId": "A"
+      }
+    },
+    {
+      "refId": "B",
+      "queryType": "expression",
+      "datasourceUid": "__expr__",
+      "model": {
+        "datasource": {
+          "type": "__expr__",
+          "uid": "__expr__"
+        },
+        "expression": "A",
+        "intervalMs": 1000,
+        "maxDataPoints": 43200,
+        "refId": "B",
+        "type": "reduce",
+        "reducer": "last"
+      }
+    },
+    {
+      "refId": "C",
+      "queryType": "expression",
+      "datasourceUid": "__expr__",
+      "model": {
+        "datasource": {
+          "type": "__expr__",
+          "uid": "__expr__"
+        },
+        "expression": "B",
+        "intervalMs": 1000,
+        "maxDataPoints": 43200,
+        "refId": "C",
+        "type": "threshold",
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                120
+              ],
+              "type": "gt"
+            },
+            "operator": {
+              "type": "and"
+            },
+            "query": {
+              "params": [
+                "C"
+              ]
+            },
+            "reducer": {
+              "params": [],
+              "type": "last"
+            },
+            "type": "query"
+          }
+        ]
+      }
+    }
+  ]
+}

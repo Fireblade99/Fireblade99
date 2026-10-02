@@ -1,0 +1,100 @@
+{
+  "title": "СессииЖдутБлокировку",
+  "ruleGroup": "pg-prod-dp-dwh-dbp3-lp1",
+  "folderUID": "dfqsba5oqdgqof",
+  "condition": "C",
+  "for": "0s",
+  "noDataState": "OK",
+  "execErrState": "Alerting",
+  "labels": {
+    "pg_group": "prod-dp",
+    "pg_instance": "dwh-dbp3-lp1",
+    "severity": "warning"
+  },
+  "annotations": {
+    "summary": "pid {{ $labels.blocked_pid }} ждёт · база {{ $labels.datname }}\nдержит pid {{ $labels.blocking_pid }} · {{ $labels.blocking_user }} / {{ $labels.blocking_app }} · {{ $labels.blocking_state }}\n{{ $labels.blocking_query }}"
+  },
+  "notification_settings": {
+    "receiver": "telegram-db-dponline"
+  },
+  "data": [
+    {
+      "refId": "A",
+      "relativeTimeRange": {
+        "from": 600,
+        "to": 0
+      },
+      "datasourceUid": "eg005bspuguf4a",
+      "model": {
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "eg005bspuguf4a"
+        },
+        "editorMode": "code",
+        "format": "table",
+        "instant": true,
+        "intervalMs": 1000,
+        "maxDataPoints": 43200,
+        "rawQuery": true,
+        "rawSql": "WITH waiters AS (\n  SELECT pid, usename, datname, query_start\n  FROM pg_stat_activity\n  WHERE wait_event_type = 'Lock'\n    AND now() - query_start > interval '30 seconds'\n)\nSELECT\n  w.pid::text                                           AS blocked_pid,\n  coalesce(w.usename,'-')                               AS blocked_user,\n  w.datname                                             AS datname,\n  b.pid::text                                           AS blocking_pid,\n  coalesce(b.usename,'-')                               AS blocking_user,\n  coalesce(nullif(b.application_name,''),'-')           AS blocking_app,\n  b.state                                               AS blocking_state,\n  left(regexp_replace(b.query, E'\\\\s+', ' ', 'g'), 200) AS blocking_query,\n  EXTRACT(EPOCH FROM (now() - w.query_start))::float8   AS seconds\nFROM waiters w\nCROSS JOIN LATERAL unnest(pg_blocking_pids(w.pid)) AS p(pid)\nJOIN pg_stat_activity b ON b.pid = p.pid",
+        "refId": "A"
+      }
+    },
+    {
+      "refId": "B",
+      "queryType": "expression",
+      "datasourceUid": "__expr__",
+      "model": {
+        "datasource": {
+          "type": "__expr__",
+          "uid": "__expr__"
+        },
+        "expression": "A",
+        "intervalMs": 1000,
+        "maxDataPoints": 43200,
+        "refId": "B",
+        "type": "reduce",
+        "reducer": "last"
+      }
+    },
+    {
+      "refId": "C",
+      "queryType": "expression",
+      "datasourceUid": "__expr__",
+      "model": {
+        "datasource": {
+          "type": "__expr__",
+          "uid": "__expr__"
+        },
+        "expression": "B",
+        "intervalMs": 1000,
+        "maxDataPoints": 43200,
+        "refId": "C",
+        "type": "threshold",
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                120
+              ],
+              "type": "gt"
+            },
+            "operator": {
+              "type": "and"
+            },
+            "query": {
+              "params": [
+                "C"
+              ]
+            },
+            "reducer": {
+              "params": [],
+              "type": "last"
+            },
+            "type": "query"
+          }
+        ]
+      }
+    }
+  ]
+}
