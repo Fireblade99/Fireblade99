@@ -1,0 +1,66 @@
+{
+  "_comment": [
+    "Данные для Import-PgSqlAlerts.ps1. Весь русский текст и все запросы живут здесь.",
+    "Скрипт читает этот файл явно указанной кодировкой UTF-8, поэтому настройки",
+    "PowerShell и редактора на него не влияют — именно ради этого он и отделён.",
+    "",
+    "ЧТО ПРАВИТЬ:",
+    "  hosts   — хосты, UID их датасорсов (Connections -> Data sources -> из адреса",
+    "            после /edit/) и порог долгой транзакции для каждого;",
+    "  checks  — проверки: название правила, запрос, текст уведомления, порог.",
+    "            threshold: null означает «взять из longTxSec своего хоста»;",
+    "  folder, contactPoint, pgGroup — куда класть и кому слать.",
+    "",
+    "В запросах НЕ ДОЛЖНО быть колонок со временем: Grafana тогда считает ответ",
+    "временным рядом и падает с 'input data must be a wide series but got type long'.",
+    "Текстовые колонки становятся метками алерта, числовая — значением."
+  ],
+  "folder": "PostgreSQL prod-dp",
+  "contactPoint": "telegram-db-dponline",
+  "pgGroup": "prod-dp",
+  "severity": "warning",
+  "groupPrefix": "pg-prod-dp-",
+  "evalIntervalSec": 60,
+  "hosts": [
+    {
+      "name": "dwh-dbp2-lp2",
+      "ds": "fg005dyg7prswd",
+      "longTxSec": 60
+    },
+    {
+      "name": "dwh-dbp3-lp1",
+      "ds": "eg005bspuguf4a",
+      "longTxSec": 3600
+    },
+    {
+      "name": "dwh-dbp10-lp2",
+      "ds": "bg0059faugqgwd",
+      "longTxSec": 3600
+    },
+    {
+      "name": "dwh-dbp12-lp2",
+      "ds": "cg00541dw4jk0e",
+      "longTxSec": 3600
+    }
+  ],
+  "checks": [
+    {
+      "title": "ЗависшаяIdleInTransaction",
+      "threshold": 120,
+      "sql": "SELECT\n  pid::text                                           AS pid,\n  usename                                             AS usename,\n  coalesce(nullif(application_name,''),'-')           AS app,\n  datname                                             AS datname,\n  left(regexp_replace(query, E'\\\\s+', ' ', 'g'), 200) AS query,\n  EXTRACT(EPOCH FROM (now() - state_change))::float8  AS seconds\nFROM pg_stat_activity\nWHERE backend_type = 'client backend'\n  AND state LIKE 'idle in transaction%'\n  AND now() - state_change > interval '30 seconds'",
+      "summary": "pid {{ $labels.pid }} · {{ $labels.usename }} / {{ $labels.app }} · база {{ $labels.datname }}\n{{ $labels.query }}"
+    },
+    {
+      "title": "ДолгаяТранзакция",
+      "threshold": null,
+      "sql": "SELECT\n  pid::text                                           AS pid,\n  usename                                             AS usename,\n  coalesce(nullif(application_name,''),'-')           AS app,\n  datname                                             AS datname,\n  coalesce(wait_event_type,'-')                       AS wait_type,\n  left(regexp_replace(query, E'\\\\s+', ' ', 'g'), 200) AS query,\n  EXTRACT(EPOCH FROM (now() - xact_start))::float8    AS seconds\nFROM pg_stat_activity\nWHERE backend_type = 'client backend'\n  AND state <> 'idle'\n  AND xact_start IS NOT NULL\n  AND now() - xact_start > interval '30 seconds'",
+      "summary": "pid {{ $labels.pid }} · {{ $labels.usename }} / {{ $labels.app }} · база {{ $labels.datname }}\n{{ $labels.query }}"
+    },
+    {
+      "title": "СессииЖдутБлокировку",
+      "threshold": 120,
+      "sql": "WITH waiters AS (\n  SELECT pid, usename, datname, query_start\n  FROM pg_stat_activity\n  WHERE wait_event_type = 'Lock'\n    AND now() - query_start > interval '30 seconds'\n)\nSELECT\n  w.pid::text                                           AS blocked_pid,\n  coalesce(w.usename,'-')                               AS blocked_user,\n  w.datname                                             AS datname,\n  b.pid::text                                           AS blocking_pid,\n  coalesce(b.usename,'-')                               AS blocking_user,\n  coalesce(nullif(b.application_name,''),'-')           AS blocking_app,\n  b.state                                               AS blocking_state,\n  left(regexp_replace(b.query, E'\\\\s+', ' ', 'g'), 200) AS blocking_query,\n  EXTRACT(EPOCH FROM (now() - w.query_start))::float8   AS seconds\nFROM waiters w\nCROSS JOIN LATERAL unnest(pg_blocking_pids(w.pid)) AS p(pid)\nJOIN pg_stat_activity b ON b.pid = p.pid",
+      "summary": "pid {{ $labels.blocked_pid }} ждёт · база {{ $labels.datname }}\nдержит pid {{ $labels.blocking_pid }} · {{ $labels.blocking_user }} / {{ $labels.blocking_app }} · {{ $labels.blocking_state }}\n{{ $labels.blocking_query }}"
+    }
+  ]
+}
