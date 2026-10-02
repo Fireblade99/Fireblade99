@@ -1,0 +1,302 @@
+{
+  "title": "PostgreSQL — разбор на живой базе (prod-dp)",
+  "description": "Прямые запросы в базу: то, чего нет в метриках — pid, текст запроса, кто кого блокирует. Открывается из алерта, когда надо понять не «где», а «что именно».",
+  "tags": [
+    "pg-monitoring",
+    "postgresql",
+    "live"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "title": "Другие дашборды",
+      "type": "dashboards",
+      "tags": [
+        "pg-monitoring"
+      ],
+      "asDropdown": true,
+      "includeVars": true,
+      "keepTime": true,
+      "icon": "external link",
+      "targetBlank": false,
+      "tooltip": "",
+      "url": ""
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "pg_host",
+        "label": "Хост",
+        "type": "datasource",
+        "query": "grafana-postgresql-datasource",
+        "refresh": 1,
+        "hide": 0,
+        "current": {},
+        "regex": "",
+        "description": "Какой хост разбираем. Это выбор датасорса, а не базы: pg_stat_activity кластерная, через любую базу видно сессии всех."
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Сессии и транзакции сейчас",
+      "description": "Всё, что не простаивает. Сортировка по началу транзакции: самая старая сверху — обычно она и есть виновник. Фоновые процессы базы и собственная сессия Grafana скрыты.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${pg_host}"
+      },
+      "gridPos": {
+        "h": 11,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto",
+              "wrapText": true
+            },
+            "filterable": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${pg_host}"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT\n    pid                                   AS \"pid\",\n    usename                               AS \"пользователь\",\n    application_name                      AS \"приложение\",\n    datname                               AS \"база\",\n    state                                 AS \"состояние\",\n    now() - xact_start                    AS \"транзакция открыта\",\n    now() - query_start                   AS \"запрос идёт\",\n    now() - state_change                  AS \"в этом состоянии\",\n    wait_event_type                       AS \"тип ожидания\",\n    wait_event                            AS \"ждёт\",\n    client_addr                           AS \"адрес\",\n    left(query, 400)                      AS \"запрос\"\nFROM pg_stat_activity\nWHERE backend_type = 'client backend'\n  AND pid <> pg_backend_pid()\n  AND state <> 'idle'\nORDER BY xact_start NULLS LAST"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Кто кого блокирует",
+      "description": "Разбирать надо правую половину — держащего, а не жертву. Пусто означает, что блокировок-ожиданий прямо сейчас нет. pg_blocking_pids вызывается только для сессий, которые реально ждут, иначе запрос тяжёлый.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${pg_host}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 11
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto",
+              "wrapText": true
+            },
+            "filterable": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${pg_host}"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "WITH waiters AS (\n    SELECT pid, usename, application_name, datname, query, query_start\n    FROM pg_stat_activity\n    WHERE wait_event_type = 'Lock'\n)\nSELECT\n    w.pid                                 AS \"ждёт pid\",\n    w.usename                             AS \"ждёт кто\",\n    w.application_name                    AS \"ждёт что\",\n    now() - w.query_start                 AS \"ждёт уже\",\n    left(w.query, 200)                    AS \"заблокированный запрос\",\n    b.pid                                 AS \"держит pid\",\n    b.usename                             AS \"держит кто\",\n    b.application_name                    AS \"держит что\",\n    b.state                               AS \"состояние держащего\",\n    now() - b.xact_start                  AS \"держит уже\",\n    left(b.query, 200)                    AS \"запрос держащего\"\nFROM waiters w\nCROSS JOIN LATERAL unnest(pg_blocking_pids(w.pid)) AS p(pid)\nJOIN pg_stat_activity b ON b.pid = p.pid\nORDER BY w.query_start"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Репликация",
+      "description": "Заполнено только на мастере: это его взгляд на подключённые реплики. На самой реплике таблица пустая — это нормально, а не поломка.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${pg_host}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto",
+              "wrapText": true
+            },
+            "filterable": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${pg_host}"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT\n    client_addr                           AS \"реплика\",\n    state                                 AS \"состояние\",\n    sync_state                            AS \"режим\",\n    write_lag                             AS \"запись\",\n    flush_lag                             AS \"сброс на диск\",\n    replay_lag                            AS \"применение\"\nFROM pg_stat_replication\nORDER BY client_addr"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Базы на этом хосте",
+      "description": "Ответ на вопрос, какие базы живут на кластере, и какая из них растёт.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${pg_host}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto",
+              "wrapText": true
+            },
+            "filterable": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${pg_host}"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT\n    datname                               AS \"база\",\n    pg_size_pretty(pg_database_size(datname)) AS \"размер\",\n    pg_database_size(datname)             AS \"байт\"\nFROM pg_database\nWHERE datallowconn AND NOT datistemplate\nORDER BY pg_database_size(datname) DESC"
+        }
+      ]
+    }
+  ]
+}
