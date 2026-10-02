@@ -12,7 +12,7 @@
     "severity": "warning"
   },
   "annotations": {
-    "summary": "pid {{ $labels.blocked_pid }} ждёт · база {{ $labels.datname }}\nдержит pid {{ $labels.blocking_pid }} · {{ $labels.blocking_user }} / {{ $labels.blocking_app }} · {{ $labels.blocking_state }}\n{{ $labels.blocking_query }}"
+    "summary": "pid {{ $labels.blocked_pid }} ждёт · база {{ $labels.datname }} · {{ humanizeDuration $values.B.Value }}\nдержит pid {{ $labels.blocking_pid }} · {{ $labels.blocking_user }} / {{ $labels.blocking_app }} · {{ $labels.blocking_state }}\n{{ $labels.blocking_query }}"
   },
   "notification_settings": {
     "receiver": "telegram-db-dponline"

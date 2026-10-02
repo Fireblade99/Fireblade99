@@ -12,7 +12,7 @@
     "severity": "warning"
   },
   "annotations": {
-    "summary": "pid {{ $labels.pid }} · {{ $labels.usename }} / {{ $labels.app }} · база {{ $labels.datname }}\n{{ $labels.query }}"
+    "summary": "pid {{ $labels.pid }} · {{ $labels.usename }} / {{ $labels.app }} · база {{ $labels.datname }} · {{ humanizeDuration $values.B.Value }}\n{{ $labels.query }}"
   },
   "notification_settings": {
     "receiver": "telegram-db-dponline"
