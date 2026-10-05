@@ -29,10 +29,10 @@ $idx = @()
 if ($IndexUrl) { $idx += @("--index-url", $IndexUrl) }
 if ($TrustedHost) { $idx += @("--trusted-host", $TrustedHost) }
 # 1. new dependencies of this version, if any (already installed ones are kept)
-& $py -m pip install --disable-pip-version-check @idx $Src
+& $py -m pip install --disable-pip-version-check --no-warn-script-location @idx $Src
 if ($LASTEXITCODE) { throw "pip failed (check -IndexUrl / -TrustedHost)" }
 # 2. the gateway code itself, even if the version number did not change
-& $py -m pip install --force-reinstall --no-deps --disable-pip-version-check @idx $Src
+& $py -m pip install --force-reinstall --no-deps --disable-pip-version-check --no-warn-script-location @idx $Src
 if ($LASTEXITCODE) { throw "pip failed (check -IndexUrl / -TrustedHost)" }
 
 Write-Host "==> start"
