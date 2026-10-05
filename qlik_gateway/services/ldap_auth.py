@@ -134,11 +134,11 @@ def authenticate(settings: Settings, login: str, password: str, trace: list[str]
             names = sorted(set(re.findall(r"\('DNS', '([^']+)'\)", msg))) or sorted(
                 set(re.findall(r"\('commonName', '([^']+)'\)", msg))
             )
-            hosts = ", ".join(sv.host for sv in servers)
+            hosts = ", ".join(f"'{sv.host}'" for sv in servers)
             msg = (
                 f"TLS: the certificate of the domain controller is for {', '.join(names) or '(names not shown)'}, "
-                f"but QGW_LDAP_URL uses {hosts}: put one of the certificate's names into QGW_LDAP_URL"
-                + ("" if names else f" ({msg[:300]})")
+                f"but QGW_LDAP_URL uses the host {hosts}: put the full name that matches the certificate "
+                "into QGW_LDAP_URL (for *.hq.local: ldaps://<name>.hq.local:636)" + ("" if names else f" ({msg[:300]})")
             )
         elif "certificate" in msg.lower() or "ssl" in msg.lower():
             msg = (
