@@ -48,18 +48,25 @@ def _add_missing_columns(engine) -> None:
     from sqlalchemy import inspect, text
 
     insp = inspect(engine)
-    with engine.begin() as conn:
-        for table in Base.metadata.sorted_tables:
-            if not insp.has_table(table.name):
+    for table in Base.metadata.sorted_tables:
+        if not insp.has_table(table.name):
+            continue
+        existing = {c["name"] for c in insp.get_columns(table.name)}
+        for col in table.columns:
+            if col.name in existing or not (col.nullable or col.server_default is not None):
                 continue
-            existing = {c["name"] for c in insp.get_columns(table.name)}
-            for col in table.columns:
-                if col.name in existing or not (col.nullable or col.server_default is not None):
-                    continue
-                ddl = f"ALTER TABLE {table.name} ADD COLUMN {col.name} {col.type.compile(engine.dialect)}"
-                if col.server_default is not None:
-                    ddl += f" DEFAULT '{col.server_default.arg}'"
-                conn.execute(text(ddl))
+            # the API and the worker start together and may both try: IF NOT EXISTS on PostgreSQL,
+            # and a column added by the other process in the meantime is not an error
+            if_not = "IF NOT EXISTS " if engine.dialect.name == "postgresql" else ""
+            ddl = f"ALTER TABLE {table.name} ADD COLUMN {if_not}{col.name} {col.type.compile(engine.dialect)}"
+            if col.server_default is not None:
+                ddl += f" DEFAULT '{col.server_default.arg}'"
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(ddl))
+            except Exception:  # noqa: BLE001
+                if col.name not in {c["name"] for c in inspect(engine).get_columns(table.name)}:
+                    raise
 
 
 def get_engine():

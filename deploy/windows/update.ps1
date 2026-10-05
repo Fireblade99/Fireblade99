@@ -39,13 +39,16 @@ Write-Host "==> start"
 foreach ($n in "QlikGateway-API", "QlikGateway-Worker") { Start-ScheduledTask -TaskName $n }
 # the API needs a few seconds (more on a busy server): wait up to 60 s, then show the log instead of failing
 $v = $null
+Write-Host -NoNewline "waiting for the gateway on port $Port "
 for ($i = 0; $i -lt 30 -and -not $v; $i++) {
     Start-Sleep -Seconds 2
+    Write-Host -NoNewline "."
     try {
-        $v = ((Invoke-WebRequest "http://localhost:$Port/openapi.json" -UseBasicParsing -TimeoutSec 5).Content |
+        $v = ((Invoke-WebRequest "http://localhost:$Port/openapi.json" -UseBasicParsing -TimeoutSec 3).Content |
             Select-String '"version":"[^"]*"').Matches.Value
     } catch { }
 }
+Write-Host ""
 if ($v) {
     Write-Host "running: $v" -ForegroundColor Green
 } else {
