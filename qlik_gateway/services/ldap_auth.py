@@ -52,8 +52,12 @@ def _tls(settings: Settings):
     return Tls(validate=ssl.CERT_REQUIRED, ca_certs_file=v)
 
 
-def authenticate(settings: Settings, login: str, password: str) -> LdapUser | None:
-    """Returns the user, or None for a wrong login/password. Raises LdapUnavailable if AD is down."""
+def authenticate(settings: Settings, login: str, password: str, trace: list[str] | None = None) -> LdapUser | None:
+    """Returns the user, or None for a wrong login/password. Raises LdapUnavailable if AD is down.
+
+    trace, if given, collects what happened at each step (shown in the audit log and by `ldap-test`).
+    """
+    trace = trace if trace is not None else []
     from ldap3 import NONE, SUBTREE, Connection, Server, ServerPool
     from ldap3.core.exceptions import LDAPBindError, LDAPException
     from ldap3.utils.conv import escape_filter_chars
@@ -61,8 +65,10 @@ def authenticate(settings: Settings, login: str, password: str) -> LdapUser | No
     sam = split_login(login)
     # an empty password would be an anonymous bind, which AD accepts: never treat it as a login
     if not sam or not password:
+        trace.append("empty login or password")
         return None
     bind_user = f"{settings.ldap_domain}\\{sam}" if settings.ldap_domain else login.strip()
+    trace.append(f"bind to {settings.ldap_url} as {bind_user}")
     tls = _tls(settings)
     servers = [
         Server(
@@ -84,12 +90,16 @@ def authenticate(settings: Settings, login: str, password: str) -> LdapUser | No
         if not conn.bind():
             # 49 = invalidCredentials (wrong password, locked or disabled account)
             if conn.result.get("result") == 49:
+                trace.append(f"AD rejected the password (49 invalidCredentials): {conn.result.get('message')}")
                 return None
             raise LdapUnavailable(f"bind failed: {conn.result.get('description')} {conn.result.get('message')}")
-    except LDAPBindError:
+    except LDAPBindError as e:
+        trace.append(f"AD rejected the login: {e}")
         return None
     except LDAPException as e:
+        trace.append(f"AD unavailable: {e}")
         raise LdapUnavailable(str(e)) from e
+    trace.append("password OK")
 
     try:
         conn.search(
@@ -99,6 +109,10 @@ def authenticate(settings: Settings, login: str, password: str) -> LdapUser | No
             attributes=["displayName", "memberOf"],
         )
         if not conn.entries:
+            trace.append(
+                f"user sAMAccountName={sam} not found under base DN '{settings.ldap_base_dn}' "
+                "(check QGW_LDAP_BASE_DN, e.g. DC=hq,DC=local)"
+            )
             log.warning("AD user %s authenticated but not found under %s", sam, settings.ldap_base_dn)
             return None
         entry = conn.entries[0]
@@ -117,9 +131,11 @@ def authenticate(settings: Settings, login: str, password: str) -> LdapUser | No
             log.warning("nested group lookup failed (%s), using memberOf", e)
             groups = sorted(set(direct))
     except LDAPException as e:
+        trace.append(f"search failed: {e}")
         raise LdapUnavailable(str(e)) from e
     finally:
         conn.unbind()
+    trace.append(f"found {dn}; groups: {', '.join(groups) or '-'}")
     return LdapUser(username=sam, display_name=display, groups=groups)
 
 

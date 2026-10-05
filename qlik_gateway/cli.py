@@ -70,6 +70,34 @@ def cmd_gen_jwt_keys(args) -> None:
     print(f"valid until: {until:%Y-%m-%d}")
 
 
+def cmd_ldap_test(args) -> None:
+    """Checks the AD login step by step, without the web UI."""
+    from .models import Client
+    from .services import ldap_auth
+
+    s = get_settings()
+    print(f"QGW_LDAP_URL={s.ldap_url or '(empty: AD login is off)'}  QGW_LDAP_DOMAIN={s.ldap_domain or '-'}")
+    print(f"QGW_LDAP_BASE_DN={s.ldap_base_dn or '-'}  QGW_LDAP_VERIFY_SSL={s.ldap_verify_ssl}")
+    print(f"QGW_LDAP_GROUPS={s.ldap_groups}  QGW_LDAP_ADMIN_USERS={s.ldap_admin_users or '-'}")
+    if not ldap_auth.enabled(s):
+        sys.exit("AD login is off: set QGW_LDAP_URL in .env")
+    password = getpass.getpass(f"AD password of {args.login}: ")
+    trace: list[str] = []
+    try:
+        user = ldap_auth.authenticate(s, args.login, password, trace)
+    except ldap_auth.LdapUnavailable as e:
+        print("\n".join(f"  {t}" for t in trace))
+        sys.exit(f"AD unavailable: {e}")
+    print("\n".join(f"  {t}" for t in trace))
+    if user is None:
+        sys.exit("login FAILED")
+    with session_scope() as db:
+        role, clients = ldap_auth.resolve_role(s, user.username, user.groups, db.scalars(select(Client)).all())
+        names = [c.name for c in db.scalars(select(Client)) if c.id in clients]
+    print(f"login OK: {user.username} ({user.display_name})")
+    print(f"role: {role or 'NO ACCESS'}" + (f", clients: {', '.join(names)}" if names else ""))
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="qlik-gateway")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -100,6 +128,10 @@ def main() -> None:
     c.add_argument("--actions", default="start,state,details,info")
     c.add_argument("--tasks", default="", help="comma separated Qlik task ids, or *")
     c.set_defaults(fn=cmd_create_client)
+
+    lt = sub.add_parser("ldap-test", help="check an AD login step by step: bind, user, groups, resulting role")
+    lt.add_argument("login", help="HQ\\login, login@domain or login")
+    lt.set_defaults(fn=cmd_ldap_test)
 
     k = sub.add_parser("gen-jwt-keys", help="generate the JWT private key + certificate for the Qlik virtual proxy")
     k.add_argument("--out", default="./secrets")

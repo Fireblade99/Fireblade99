@@ -284,13 +284,21 @@ def login(
     local = db.scalars(select(AdminUser).where(AdminUser.username == username.strip())).first()
     if local is not None and local.source == "local" and local.password_hash:
         if not (local.enabled and verify_password(password, local.password_hash)):
-            done("denied", "Неверный логин или пароль")
+            done(
+                "denied",
+                "Неверный логин или пароль",
+                message="local account: wrong password"
+                if local.enabled
+                else "local account is disabled"
+                + ("" if not ldap_auth.enabled(settings) else " (a local account with this login hides the AD one)"),
+            )
             return retry
         user, role, clients = local, local.role or "admin", list(local.client_ids or [])
     # 2. Active Directory
     elif ldap_auth.enabled(settings):
+        trace: list[str] = []
         try:
-            found = ldap_auth.authenticate(settings, username, password)
+            found = ldap_auth.authenticate(settings, username, password, trace)
         except ldap_auth.LdapUnavailable as e:
             done("error", "AD недоступен — войдите аварийной локальной учётной записью", message=str(e)[:500])
             return retry
@@ -298,27 +306,36 @@ def login(
             done("error", "Вход через AD не установлен (нет модуля ldap3): обновите шлюз через update.ps1")
             return retry
         if found is None:
-            done("denied", "Неверный логин или пароль")
+            done("denied", "Неверный логин или пароль", message=" → ".join(trace)[:1000])
             return retry
         role, clients = ldap_auth.resolve_role(settings, found.username, found.groups, db.scalars(select(Client)).all())
         if role is None:
             done(
                 "denied",
                 "Нет доступа: учётная запись не входит ни в одну группу шлюза. Обратитесь к администратору.",
-                message="no gateway group",
+                message=f"no gateway group (QGW_LDAP_GROUPS={settings.ldap_groups}); user groups: "
+                + ", ".join(found.groups)[:800],
                 groups=found.groups[:50],
             )
             return retry
         user = db.scalars(select(AdminUser).where(AdminUser.username == found.username)).first()
         if user is not None and (user.source != "ad" or not user.enabled):
-            done("denied", "Учётная запись отключена администратором шлюза")
+            done(
+                "denied",
+                "Учётная запись отключена администратором шлюза",
+                message="disabled in the gateway" if user.source == "ad" else "a local account has this login",
+            )
             return retry
         if user is None:
             user = AdminUser(username=found.username, password_hash="", source="ad")
             db.add(user)
         user.role, user.display_name, user.client_ids = role, found.display_name, clients
     else:
-        done("denied", "Неверный логин или пароль")
+        done(
+            "denied",
+            "Неверный логин или пароль",
+            message="no local account with this login and AD login is off (QGW_LDAP_URL is empty)",
+        )
         return retry
 
     user.last_login_at = utcnow()

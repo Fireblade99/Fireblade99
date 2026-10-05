@@ -15,7 +15,8 @@ def audit(db: Session, *, actor_type: str, action: str, actor: str = "", **field
     entry = AuditLog(actor_type=actor_type, actor=actor, action=action, **fields)
     db.add(entry)
     level = logging.DEBUG if actor_type == "qlik" and fields.get("outcome", "ok") == "ok" else logging.INFO
-    log.log(level, "%s %s %s %s", actor_type, actor, action, fields.get("outcome", "ok"))
+    msg = fields.get("message") or ""
+    log.log(level, "%s %s %s %s%s", actor_type, actor, action, fields.get("outcome", "ok"), f" | {msg}" if msg else "")
     return entry
 
 

@@ -25,11 +25,13 @@ def ad(monkeypatch, settings):
     settings.ldap_admin_users = "Ivanov, someone"
     state = {"down": False}
 
-    def fake(_settings, login, password):
+    def fake(_settings, login, password, trace=None):
         if state["down"]:
             raise ldap_auth.LdapUnavailable("dc01.test: connection refused")
         sam = ldap_auth.split_login(login)
         if sam not in AD or AD[sam][0] != password or not password:
+            if trace is not None:
+                trace.append("AD rejected the password (49 invalidCredentials)")
             return None
         return ldap_auth.LdapUser(username=sam, display_name=sam.title(), groups=AD[sam][1])
 
@@ -181,3 +183,37 @@ def test_ldap_bind_and_groups_against_mock_directory(monkeypatch, settings):
     assert u.username == "ivanov" and u.display_name == "Иван Иванов" and u.groups == ["QGW-Admins"]
     assert ldap_auth.authenticate(settings, "ivanov", "wrong") is None
     assert ldap_auth.authenticate(settings, "ivanov", "") is None
+
+
+def test_denied_login_records_the_reason(http, ad, settings):
+    from qlik_gateway.models import AuditLog
+
+    login(http, "ivanov", "wrong")
+    settings.ldap_default_role = "none"
+    login(http, "petrov", "pw")
+    audit_queue.flush()
+    with session_scope() as db:
+        msgs = [a.message for a in db.query(AuditLog).filter_by(action="admin.login").order_by(AuditLog.id)]
+    assert "AD rejected the password" in msgs[-2]
+    assert "no gateway group" in msgs[-1] and "Domain Users" in msgs[-1]
+
+
+def test_ldap_test_cli(monkeypatch, settings, capsys):
+    from qlik_gateway import cli
+
+    settings.ldap_url = "ldaps://dc01:636"
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": "pw")
+
+    def fake(_s, login, password, trace):
+        trace += ["bind to ldaps://dc01:636 as HQ\\ivanov", "password OK", "found CN=Ivan; groups: QGW-Admins"]
+        return ldap_auth.LdapUser("ivanov", "Ivan", ["QGW-Admins"])
+
+    monkeypatch.setattr(ldap_auth, "authenticate", fake)
+    settings.ldap_admin_users = "ivanov"
+    from qlik_gateway.db import init_engine
+
+    init_engine(settings.database_url)
+    cli.cmd_ldap_test(type("A", (), {"login": "HQ\\ivanov"})())
+    out = capsys.readouterr().out
+    assert "password OK" in out and "login OK: ivanov" in out and "role: admin" in out
