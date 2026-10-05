@@ -97,8 +97,14 @@ def authenticate(settings: Settings, login: str, password: str, trace: list[str]
         trace.append(f"AD rejected the login: {e}")
         return None
     except LDAPException as e:
-        trace.append(f"AD unavailable: {e}")
-        raise LdapUnavailable(str(e)) from e
+        msg = str(e)
+        if "invalid server address" in msg:  # ldap3: the host name did not resolve
+            hosts = ", ".join(sv.host for sv in servers)
+            msg = f"DNS cannot resolve {hosts}: check the host names in QGW_LDAP_URL (nltest /dclist:<domain>)"
+        elif "socket" in msg.lower() or "timed out" in msg.lower():
+            msg = f"cannot connect to {settings.ldap_url} ({msg}): check the port and the firewall"
+        trace.append(f"AD unavailable: {msg}")
+        raise LdapUnavailable(msg) from e
     trace.append("password OK")
 
     try:

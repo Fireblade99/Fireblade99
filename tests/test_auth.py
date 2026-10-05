@@ -217,3 +217,10 @@ def test_ldap_test_cli(monkeypatch, settings, capsys):
     cli.cmd_ldap_test(type("A", (), {"login": "HQ\\ivanov"})())
     out = capsys.readouterr().out
     assert "password OK" in out and "login OK: ivanov" in out and "role: admin" in out
+
+
+def test_unresolvable_ldap_host_gives_a_clear_reason(settings):
+    settings.ldap_url = "ldaps://no-such-dc.invalid:636"
+    settings.ldap_timeout_seconds = 2
+    with pytest.raises(ldap_auth.LdapUnavailable, match="DNS cannot resolve no-such-dc.invalid"):
+        ldap_auth.authenticate(settings, "HQ\\ivanov", "pw")
