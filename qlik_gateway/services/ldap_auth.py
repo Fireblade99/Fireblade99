@@ -5,6 +5,7 @@ Group membership is read with the AD "in chain" rule, so nested groups count too
 """
 
 import logging
+import re
 import ssl
 from dataclasses import dataclass, field
 
@@ -57,7 +58,6 @@ def _system_tls():
     intermediate certificates fetched like Windows does) - the same as QGW_QLIK_VERIFY_SSL=system.
     Python's own check sees only part of the Windows store and fails on internal CAs."""
     from ldap3 import Tls
-    from ldap3.core.tls import check_hostname
 
     try:
         import truststore
@@ -66,18 +66,17 @@ def _system_tls():
 
     class SystemTls(Tls):
         def wrap_socket(self, connection, do_handshake=False):
+            # The OS checks the chain AND the host name. ldap3's own host name check is not used here:
+            # with the OS doing the verification Python sees no parsed certificate and it would always fail.
             ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            ctx.check_hostname = False  # checked below the same way ldap3 does it
+            ctx.check_hostname = True
             ctx.verify_mode = ssl.CERT_REQUIRED
-            wrapped = ctx.wrap_socket(
+            connection.socket = ctx.wrap_socket(
                 connection.socket,
                 server_side=False,
                 do_handshake_on_connect=do_handshake,
                 server_hostname=connection.server.host,
             )
-            if do_handshake:
-                check_hostname(wrapped, connection.server.host, self.valid_names)
-            connection.socket = wrapped
 
     return SystemTls(validate=ssl.CERT_REQUIRED)
 
@@ -131,6 +130,16 @@ def authenticate(settings: Settings, login: str, password: str, trace: list[str]
         if "invalid server address" in msg:  # ldap3: the host name did not resolve
             hosts = ", ".join(sv.host for sv in servers)
             msg = f"DNS cannot resolve {hosts}: check the host names in QGW_LDAP_URL (nltest /dclist:<domain>)"
+        elif "doesn't match any name" in msg or "hostname mismatch" in msg.lower() or "mismatch" in msg.lower():
+            names = sorted(set(re.findall(r"\('DNS', '([^']+)'\)", msg))) or sorted(
+                set(re.findall(r"\('commonName', '([^']+)'\)", msg))
+            )
+            hosts = ", ".join(sv.host for sv in servers)
+            msg = (
+                f"TLS: the certificate of the domain controller is for {', '.join(names) or '(names not shown)'}, "
+                f"but QGW_LDAP_URL uses {hosts}: put one of the certificate's names into QGW_LDAP_URL"
+                + ("" if names else f" ({msg[:300]})")
+            )
         elif "certificate" in msg.lower() or "ssl" in msg.lower():
             msg = (
                 f"TLS: the domain controller's certificate is not trusted ({msg}). Use the DC's full host name "
