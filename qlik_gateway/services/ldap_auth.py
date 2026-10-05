@@ -48,8 +48,38 @@ def _tls(settings: Settings):
     if v.lower() in ("false", "0", "no"):
         return Tls(validate=ssl.CERT_NONE)
     if v.lower() in ("system", "true", "1", "yes", ""):
-        return Tls(validate=ssl.CERT_REQUIRED)  # Windows: the machine's certificate store
+        return _system_tls()
     return Tls(validate=ssl.CERT_REQUIRED, ca_certs_file=v)
+
+
+def _system_tls():
+    """Verifies the domain controller's certificate with the OS (Windows: the machine's trusted roots,
+    intermediate certificates fetched like Windows does) - the same as QGW_QLIK_VERIFY_SSL=system.
+    Python's own check sees only part of the Windows store and fails on internal CAs."""
+    from ldap3 import Tls
+    from ldap3.core.tls import check_hostname
+
+    try:
+        import truststore
+    except ImportError:  # pragma: no cover
+        return Tls(validate=ssl.CERT_REQUIRED)
+
+    class SystemTls(Tls):
+        def wrap_socket(self, connection, do_handshake=False):
+            ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False  # checked below the same way ldap3 does it
+            ctx.verify_mode = ssl.CERT_REQUIRED
+            wrapped = ctx.wrap_socket(
+                connection.socket,
+                server_side=False,
+                do_handshake_on_connect=do_handshake,
+                server_hostname=connection.server.host,
+            )
+            if do_handshake:
+                check_hostname(wrapped, connection.server.host, self.valid_names)
+            connection.socket = wrapped
+
+    return SystemTls(validate=ssl.CERT_REQUIRED)
 
 
 def authenticate(settings: Settings, login: str, password: str, trace: list[str] | None = None) -> LdapUser | None:
@@ -101,6 +131,12 @@ def authenticate(settings: Settings, login: str, password: str, trace: list[str]
         if "invalid server address" in msg:  # ldap3: the host name did not resolve
             hosts = ", ".join(sv.host for sv in servers)
             msg = f"DNS cannot resolve {hosts}: check the host names in QGW_LDAP_URL (nltest /dclist:<domain>)"
+        elif "certificate" in msg.lower() or "ssl" in msg.lower():
+            msg = (
+                f"TLS: the domain controller's certificate is not trusted ({msg}). Use the DC's full host name "
+                "(not an IP) in QGW_LDAP_URL; otherwise QGW_LDAP_VERIFY_SSL=<path to the domain root CA .pem>, "
+                "or false to skip the check"
+            )
         elif "socket" in msg.lower() or "timed out" in msg.lower():
             msg = f"cannot connect to {settings.ldap_url} ({msg}): check the port and the firewall"
         trace.append(f"AD unavailable: {msg}")
