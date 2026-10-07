@@ -18,11 +18,31 @@ $py = Get-ChildItem (Join-Path $InstallDir "python\python.exe"), (Join-Path $Ins
     Select-Object -First 1 -ExpandProperty FullName
 if (-not $py) { throw "Python of the gateway not found in $InstallDir" }
 
+function Stop-Gateway {
+    # every gateway process, however it was started (task, run-api.cmd in a window, another user):
+    # python.exe of this installation, anything running qlik_gateway, and whatever listens on the port
+    $pyDir = Join-Path $InstallDir "python"
+    $ids = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" | Where-Object {
+            $_.CommandLine -like "*qlik_gateway*" -or ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($pyDir, "OrdinalIgnoreCase"))
+        } | ForEach-Object { $_.ProcessId })
+    $ids += @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $_.OwningProcess })
+    foreach ($id in ($ids | Where-Object { $_ -and $_ -ne 0 -and $_ -ne 4 } | Sort-Object -Unique)) {
+        Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+    }
+    for ($i = 0; $i -lt 10 -and (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue); $i++) {
+        Start-Sleep -Seconds 1
+    }
+    $left = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    if ($left) {
+        $p = Get-CimInstance Win32_Process -Filter "ProcessId=$($left[0].OwningProcess)"
+        throw "Port $Port is still taken by process $($p.ProcessId): $($p.ExecutablePath) $($p.CommandLine)"
+    }
+}
+
+
 Write-Host "==> stop"
 foreach ($n in "QlikGateway-API", "QlikGateway-Worker") { Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue }
-Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -like "*qlik_gateway*" } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-Start-Sleep -Seconds 2
+Stop-Gateway
 
 Write-Host "==> install code from $Src"
 $idx = @()
@@ -49,6 +69,15 @@ for ($i = 0; $i -lt 30 -and -not $v; $i++) {
     } catch { }
 }
 Write-Host ""
+$installed = (& $py -P -c "import qlik_gateway; print(qlik_gateway.__version__)").Trim()
+if ($v -and $v -notlike "*$installed*") {
+    $p = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 |
+        ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)" }
+    Write-Warning "Port $Port answers $v, but $installed is installed: an old gateway process is still serving."
+    if ($p) { Write-Warning "It is process $($p.ProcessId): $($p.ExecutablePath) $($p.CommandLine)" }
+    Write-Warning "Run C:\qgw\restart.cmd (as Administrator); if it stays, stop that process and run it again."
+    exit 1
+}
 if ($v) {
     Write-Host "running: $v" -ForegroundColor Green
 } else {
