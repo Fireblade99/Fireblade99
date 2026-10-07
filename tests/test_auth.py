@@ -79,13 +79,26 @@ def test_ad_login_roles_and_denials(http, ad):
         assert u.source == "ad" and u.role == "admin" and u.password_hash == "" and u.last_login_at
 
     http.post("/ui/logout", data={})
-    login(http, "kuznetsov", "pw")  # editor: settings and clients yes, tokens and users no
-    assert http.get("/ui/settings").status_code == 200 and "редактор" in http.get("/ui/").text
+    login(http, "kuznetsov", "pw")  # editor: sees settings and logs, may re-sync tasks, changes nothing
+    settings_page = http.get("/ui/settings").text
+    assert "Режим просмотра" in settings_page and "Стоп-кран: пауза" not in settings_page
+    assert "редактор" in http.get("/ui/").text and "Синхронизировать" in http.get("/ui/tasks").text
     assert http.get("/ui/clients/new").status_code == 403
     with session_scope() as db:
         uid = db.query(AdminUser).filter_by(username="ivanov").one().id
-    csrf = re.search(r'name="csrf" value="([^"]+)"', http.get("/ui/settings").text).group(1)
+        cid = db.query(Client).first().id if db.query(Client).first() else None
+    csrf = re.search(r'name="csrf" value="([^"]+)"', settings_page).group(1)
     assert http.post(f"/ui/users/{uid}/toggle", data={"csrf": csrf}).status_code == 403
+    assert http.post("/ui/dispatch", data={"csrf": csrf, "pause": "1", "reason": "x"}).status_code == 403
+    assert (
+        http.post(
+            "/ui/settings/runtime", data={"csrf": csrf, "max_concurrent_executions": "5", "poll_interval_seconds": "20"}
+        ).status_code
+        == 403
+    )
+    assert http.post(f"/ui/tasks/{SALES}", data={"csrf": csrf, "blocked": "1"}).status_code == 403
+    if cid:
+        assert http.post(f"/ui/clients/{cid}/block", data={"csrf": csrf, "reason": "x"}).status_code == 403
 
     http.post("/ui/logout", data={})
     login(http, "petrov", "pw")
@@ -144,11 +157,10 @@ def test_team_sees_only_its_clients(http, coordinator, make_client, mock, ad):
     audit = http.get("/ui/audit").text
     assert "dwh" in audit and ">ml<" not in audit and "client: ml" not in audit
 
-    # cancel: own run nobody joined - yes; another team's run - no
-    csrf = re.search(r'name="csrf" value="([^"]+)"', http.get(f"/ui/executions/{own}").text).group(1)
-    assert http.post(f"/ui/executions/{foreign}/cancel", data={"csrf": csrf}).status_code == 403
-    r = http.post(f"/ui/executions/{own}/cancel", data={"csrf": csrf}, follow_redirects=False)
-    assert r.status_code == 303
+    # a team only looks: no cancelling, not even its own run
+    assert "Остановить reload" not in http.get(f"/ui/executions/{own}").text
+    csrf = re.search(r'name="csrf" value="([^"]+)"', http.get("/ui/login").text).group(1)
+    assert http.post(f"/ui/executions/{own}/cancel", data={"csrf": csrf}).status_code == 403
 
 
 def test_ldap_bind_and_groups_against_mock_directory(monkeypatch, settings):

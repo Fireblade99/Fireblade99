@@ -175,13 +175,18 @@ def can_see_execution(request: Request, db: Session, ex: Execution) -> bool:
 
 
 def can_edit(request: Request) -> bool:
-    """Admin and editor change settings, clients, tasks; only an admin issues tokens and manages users."""
+    """Every change (stop switch, parameters, clients, tasks, cancelling runs, tokens, users): admin only."""
+    return is_admin(request)
+
+
+def can_view_settings(request: Request) -> bool:
+    """Editor: sees everything incl. settings and logs and may re-sync the task catalog; changes nothing."""
     return request.session.get("role") in ("admin", "editor")
 
 
 def require_editor(request: Request, user: str = Depends(admin_user)) -> str:
-    if not can_edit(request):
-        raise HTTPException(403, "Недостаточно прав: действие доступно редактору или администратору")
+    if not can_view_settings(request):
+        raise HTTPException(403, "Недостаточно прав: доступно редактору или администратору")
     return user
 
 
@@ -211,6 +216,7 @@ def render(request: Request, name: str, **ctx) -> HTMLResponse:
     ctx.setdefault("admin", request.session.get("admin"))
     ctx["is_admin"] = is_admin(request)
     ctx["can_edit"] = can_edit(request)
+    ctx["can_view_settings"] = can_view_settings(request)
     ctx["role"] = request.session.get("role")
     ctx["display"] = request.session.get("display")
     ctx["csrf"] = csrf_token(request)
@@ -524,7 +530,7 @@ def toggle_dispatch(
     request: Request,
     pause: str = Form(...),
     reason: str = Form(""),
-    user: str = Depends(require_editor),
+    user: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     if pause == "1":
@@ -544,7 +550,7 @@ def save_runtime(
     max_concurrent_executions: str = Form(...),
     poll_interval_seconds: str = Form(...),
     reset: str = Form(""),
-    user: str = Depends(require_editor),
+    user: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     before = runtime.effective(db, get_settings())
@@ -691,7 +697,7 @@ def client_edit_page(client_id: int, request: Request, user: str = Depends(admin
 
 @router.post("/clients/{client_id}", dependencies=[Depends(check_csrf)])
 async def client_update(
-    client_id: int, request: Request, user: str = Depends(require_editor), db: Session = Depends(get_db)
+    client_id: int, request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)
 ):
     c = db.get(Client, client_id) or _404()
     form = await request.form()
@@ -723,7 +729,7 @@ def client_block(
     reason: str = Form(""),
     cancel_queued: str = Form(""),
     stop_running: str = Form(""),
-    user: str = Depends(require_editor),
+    user: str = Depends(require_admin),
     db: Session = Depends(get_db),
     backend=Depends(get_backend),
 ):
@@ -838,7 +844,7 @@ def task_update(
     blocked_reason: str = Form(""),
     min_interval_seconds: int = Form(0),
     if_running_policy: str = Form(""),
-    user: str = Depends(require_editor),
+    user: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     t = db.get(QlikTask, task_id) or _404()
@@ -991,11 +997,8 @@ def execution_page(execution_id: int, request: Request, user: str = Depends(admi
 
 
 def _can_cancel(request: Request, ex: Execution) -> bool:
-    """Admin: any run. Team: its own run that no other request is waiting for."""
-    if can_edit(request):
-        return True
-    sc = scope(request)
-    return sc is not None and ex.client_id in sc and not ex.dedup_hits
+    """Stopping a run is a change: admin only."""
+    return is_admin(request)
 
 
 @router.get("/executions/{execution_id}/log")

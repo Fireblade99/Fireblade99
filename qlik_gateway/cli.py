@@ -117,7 +117,7 @@ def main() -> None:
     ad.add_argument(
         "--role",
         choices=["admin", "editor", "viewer"],
-        help="admin: everything; editor: all but tokens and UI users; viewer: read-only",
+        help="admin: everything; editor: sees everything incl. settings, may re-sync tasks; viewer: read-only",
     )
     ad.set_defaults(fn=cmd_create_admin)
 
