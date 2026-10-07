@@ -25,7 +25,7 @@
 {% if ex.script_log_ref %}<a class="btn" href="/ui/executions/{{ ex.id }}/log">Лог скрипта</a>{% endif %}</p>
 <h2 id="requests">Запросы на этот запуск</h2>
 <div class="muted small" style="margin-bottom:6px">Все запросы на перезагрузку, которые пришли к этому запуску, от любых клиентов: кто создал запуск, кто к нему присоединился и кому отказали, пока он шёл в Qlik.</div>
-<div class="table-wrap"><table><tr><th>Время</th><th>Клиент</th><th>Инициатор</th><th>on_active</th><th>Итог</th><th>Подробности</th></tr>
+<div class="table-wrap scroll"><table class="sortable"><tr><th>Время</th><th>Клиент</th><th>Инициатор</th><th>on_active</th><th>Итог</th><th>Подробности</th></tr>
 {% for a in start_requests %}{% set m = a.meta or {} %}{% set r = request_result(a) %}<tr>
 <td class="small nowrap">{{ a.ts|dt }}</td>
 <td>{% if a.client_id %}<a href="/ui/clients/{{ a.client_id }}">{{ a.actor }}</a>{% else %}{{ a.actor }}{% endif %}</td>
@@ -36,10 +36,10 @@
 </tr>{% else %}<tr><td colspan="6" class="muted">Нет данных (запросы до версии 0.4.3 здесь не показываются)</td></tr>{% endfor %}
 </table></div>
 <h2>Сообщения Qlik</h2>
-<div class="table-wrap"><table><tr><th>Тип</th><th>Время</th><th>Сообщение</th></tr>
+<div class="table-wrap scroll"><table class="sortable"><tr><th>Тип</th><th>Время</th><th>Сообщение</th></tr>
 {% for d in ex.details %}<tr><td>{{ d.type }}</td><td class="small">{{ d.at or "" }}</td><td>{{ d.message }}</td></tr>{% else %}<tr><td colspan="3" class="muted">—</td></tr>{% endfor %}</table></div>
 <h2>События</h2>
-<div class="table-wrap"><table><tr><th>Время</th><th>Кто</th><th>Действие</th><th>Результат</th><th>Сообщение</th></tr>
+<div class="table-wrap scroll"><table class="sortable"><tr><th>Время</th><th>Кто</th><th>Действие</th><th>Результат</th><th>Сообщение</th></tr>
 {% for a in events %}<tr><td class="small">{{ a.ts|dt }}</td><td>{{ a.actor_type }}: {{ a.actor }}</td><td class="mono">{{ a.action }}</td><td><span class="badge {{ 'ok' if a.outcome == 'ok' else 'bad' }}">{{ a.outcome }}</span></td><td class="small">{{ a.message }}</td></tr>{% endfor %}
 </table></div>
 {% endblock %}

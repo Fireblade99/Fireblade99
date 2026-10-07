@@ -1,11 +1,12 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{% block title %}Qlik Gateway{% endblock %}</title><link rel="stylesheet" href="/static/style.css?v={{ app_version }}">
+<script src="/static/ui.js?v={{ app_version }}" defer></script>
 {% block head %}{% endblock %}</head><body>
 {% if admin %}
 <header><span class="brand">Qlik Gateway</span>
-<nav><a href="/ui/">Мониторинг</a><a href="/ui/executions">Запуски</a><a href="/ui/clients">Клиенты</a><a href="/ui/tasks">Задачи Qlik</a><a href="/ui/audit">Журнал</a>{% if can_edit %}<a href="/ui/settings">Настройки</a>{% endif %}<a href="/docs">API</a></nav>
-<span class="me" title="Все даты и время в интерфейсе — {{ tz_label() }}">{{ display or admin }}{% if role == "editor" %} <span class="badge muted">редактор</span>{% elif role == "viewer" %} <span class="badge muted">просмотр</span>{% elif role == "team" %} <span class="badge muted">команда</span>{% endif %}<form class="inline" method="post" action="/ui/logout"><button>Выйти</button></form></span></header>
+<nav><a href="/ui/">Мониторинг</a><a href="/ui/clients">Клиенты</a><a href="/ui/tasks">Задачи Qlik</a><a href="/ui/executions">Запуски</a><a href="/ui/audit">Журнал</a>{% if can_edit %}<a href="/ui/settings">Настройки</a>{% endif %}<a href="/docs">API</a></nav>
+<span class="me" title="Все даты и время в интерфейсе — {{ tz_label() }}">{{ display or admin }} ({{ tz_label() }}){% if role == "editor" %} <span class="badge muted">редактор</span>{% elif role == "viewer" %} <span class="badge muted">просмотр</span>{% elif role == "team" %} <span class="badge muted">команда</span>{% endif %}<form class="inline" method="post" action="/ui/logout"><button>Выйти</button></form></span></header>
 {% endif %}
 <main>
 {% if flash %}<div class="flash {{ flash.kind }}">{{ flash.msg }}</div>{% endif %}

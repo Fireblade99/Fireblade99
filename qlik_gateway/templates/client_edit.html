@@ -63,7 +63,7 @@
 
 {% if recent_audit %}
 <h2>Последние действия клиента</h2>
-<div class="table-wrap"><table><tr><th>Время</th><th>Действие</th><th>Результат</th><th>IP</th><th>Инициатор</th><th>Сообщение</th></tr>
+<div class="table-wrap scroll"><table class="sortable"><tr><th>Время</th><th>Действие</th><th>Результат</th><th>IP</th><th>Инициатор</th><th>Сообщение</th></tr>
 {% for a in recent_audit %}<tr><td class="small">{{ a.ts|dt }}</td><td class="mono">{{ a.action }}</td>
 <td><span class="badge {{ 'ok' if a.outcome == 'ok' else 'bad' }}">{{ a.outcome }} {{ a.status_code or "" }}</span></td>
 <td class="small">{{ a.ip or "" }}</td><td class="small mono">{{ a.meta|tojson if a.meta else "" }}</td><td class="small">{{ a.message }}</td></tr>{% endfor %}

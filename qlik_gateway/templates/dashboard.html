@@ -10,7 +10,6 @@
   <span class="badge ok">Запуск в Qlik активен</span>
 {% endif %}
   <span class="small muted">одновременных reload: {{ rt.max_concurrent_executions }} · опрос Qlik раз в {{ rt.poll_interval_seconds|int }} с одним запросом</span>
-  {% if can_edit %}<a class="small" href="/ui/settings">настройки →</a>{% endif %}
 </div>
 
 <div class="grid">
@@ -21,9 +20,9 @@
  <div class="stat"><div class="v">{{ qlik_calls_hour }}</div><div class="l">Запросов шлюза в Qlik за час{% if qlik_errors_hour %} · <span style="color:var(--bad)">{{ qlik_errors_hour }} ошибок</span>{% endif %}</div></div>
 </div>
 
-<h2>Клиенты (24 ч)</h2>
-<div class="table-wrap"><table>
-<tr><th>Клиент</th><th>Состояние</th><th class="num">Вызовов API</th><th class="num">Отклонено</th><th class="num">Запусков</th><th class="num">Успешно</th><th class="num">Неуспешных</th><th class="num">Схлопнуто дублей</th><th>Последний вызов</th><th></th></tr>
+<h2>Состояние за последние 24 ч.</h2>
+<div class="table-wrap rows5"><table class="sortable">
+<tr><th>Клиент</th><th>Состояние</th><th class="num">Вызовов API</th><th class="num">Отклонено</th><th class="num">Запусков</th><th class="num">Успешно</th><th class="num">Неуспешных</th><th class="num">Схлопнуто дублей</th><th>Последний вызов</th><th class="nosort"></th></tr>
 {% set maxcalls = (load|map(attribute="calls")|max) if load else 0 %}
 {% for r in load %}<tr>
 <td><a href="/ui/clients/{{ r.client.id }}">{{ r.client.name }}</a><div class="muted small">{{ r.client.owner_contact }}</div></td>
@@ -39,16 +38,16 @@
 </table></div>
 
 <div class="row">
-<div class="card"><h2 style="margin-top:0">Топ задач (24 ч)</h2><div class="table-wrap"><table>
+<div class="card flat"><div class="table-wrap rows5"><table class="sortable">
 <tr><th>Задача</th><th class="num">Запусков</th><th class="num">Ошибок</th><th class="num">Сред.</th><th class="num">Макс.</th><th class="num">Σ время</th></tr>
 {% for t in top_tasks %}{% set d = durations.get(t.task_id) %}<tr>
 <td><a href="/ui/executions?task={{ t.task_id }}">{{ t.task_name }}</a></td><td class="num">{{ t.runs }}</td><td class="num">{{ t.fails or 0 }}</td>
 <td class="num">{{ d[0]|dur if d else "—" }}</td><td class="num">{{ d[1]|dur if d else "—" }}</td><td class="num">{{ d[2]|dur if d else "—" }}</td></tr>
 {% else %}<tr><td colspan="6" class="muted">Нет данных</td></tr>{% endfor %}</table></div></div>
 
-<div class="card"><h2 style="margin-top:0">Ноды Qlik (24 ч)</h2>
-{% if nodes %}<div class="table-wrap"><table>
-<tr><th>Нода</th><th class="num">Выполнено</th><th class="num">Успешно</th><th class="num">Ошибок</th><th class="num">Сейчас</th><th class="num">Σ время reload</th><th class="num">CPU %</th><th class="num">RAM, МБ<div class="muted small">занято / своб.</div></th></tr>
+<div class="card flat">
+{% if nodes %}<div class="table-wrap rows5"><table class="sortable">
+<tr><th>Нода Qlik</th><th class="num">Выполнено</th><th class="num">Успешно</th><th class="num">Ошибок</th><th class="num">Сейчас</th><th class="num">Σ время reload</th><th class="num">CPU %</th><th class="num">RAM, МБ<div class="muted small">занято / своб.</div></th></tr>
 {% for n in nodes %}{% set st = n.stats %}{% set h = n.health %}<tr>
 <td class="nowrap">{{ n.node }}{% if h and not h.ok %} <span class="badge bad">недоступна</span>{% elif h and h.saturated %} <span class="badge warn">saturated</span>{% endif %}</td>
 <td class="num">{{ st.runs if st else 0 }}</td>
@@ -60,11 +59,11 @@
 <td class="num nowrap">{% if h and h.mem_committed_mb is not none %}{{ "%.0f"|format(h.mem_committed_mb) }} / {{ "%.0f"|format(h.mem_free_mb or 0) }}{% else %}—{% endif %}</td></tr>{% endfor %}
 </table></div>
 <p class="muted small">Выполнено/успешно/ошибок — по запускам через шлюз за 24 ч, нода берётся из Qlik (executingNodeName). CPU и RAM — последний снимок engine healthcheck{% if not nodes|selectattr("health")|list %} (не настроено: QGW_NODE_HEALTH_URLS){% endif %}.</p>
-{% else %}<p class="muted">За 24 ч запусков не было.</p>{% endif %}
+{% else %}<div class="table-wrap rows5"><table><tr><th>Нода Qlik</th><th class="num">Выполнено</th><th class="num">Успешно</th><th class="num">Ошибок</th></tr><tr><td colspan="4" class="muted">За 24 ч запусков не было</td></tr></table></div>{% endif %}
 </div></div>
 
 <h2>Активные задачи</h2>
-<div class="table-wrap"><table>{% include "_exec_head.html" %}
+<div class="table-wrap rows5"><table class="sortable">{% include "_exec_head.html" %}
 {% for e in active %}{% include "_exec_row.html" %}{% else %}<tr><td colspan="9" class="muted">Нет активных запусков</td></tr>{% endfor %}
 </table></div>
 {% endblock %}

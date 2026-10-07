@@ -76,18 +76,19 @@ def test_audit_filters_and_pagination(http, coordinator, make_client):
     _login(http)
     now = utcnow()
     with session_scope() as db:
-        for i in range(45):
+        for i in range(120):
             db.add(AuditLog(actor_type="client", actor="team-x", action="api.state", ts=now - timedelta(minutes=i)))
         db.add(
             AuditLog(actor_type="client", actor="old", action="api.start", ts=now - timedelta(days=3), ip="10.1.2.3")
         )
 
-    page = http.get("/ui/audit?actor=team-x&per_page=20").text
-    assert "Показано 1–20 из 45" in page and "page=3" in page
+    page = http.get("/ui/audit?actor=team-x").text  # always 50 per page, no page size selector
+    assert "Показано 1–50 из 120" in page and "page=3" in page and "Строк на странице" not in page
     last = http.get("/ui/audit?actor=team-x&per_page=20&page=3").text
-    assert "Показано 41–45 из 45" in last
+    assert "Показано 101–120 из 120" in last
     day_ago = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M")
-    assert "old" not in http.get(f"/ui/audit?date_from={day_ago}&actor_type=client").text.split("<table>")[1]
+    recent = http.get(f"/ui/audit?date_from={day_ago}&actor_type=client").text
+    assert "old" not in recent.split('<table class="sortable">')[1]
     two_days_ago = (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M")
     only_old = http.get(f"/ui/audit?date_to={two_days_ago}&actor_type=client").text
     assert "Показано 1–1 из 1" in only_old and "10.1.2.3" in only_old
@@ -108,7 +109,7 @@ def test_ui_time_zone(http, coordinator, settings, monkeypatch):
     with session_scope() as db:
         db.add(AuditLog(actor_type="system", actor="tz-probe", action="x", ts=datetime(2026, 9, 29, 7, 0, 0)))
     page = http.get("/ui/audit?actor=tz-probe").text
-    assert "29.09.2026 12:00:00" in page and "admin (UTC+5)" not in page  # stored 07:00 UTC -> shown 12:00 UTC+5
+    assert "29.09.2026 12:00:00" in page and "admin (UTC+5)" in page  # stored 07:00 UTC -> shown 12:00 UTC+5
     # the filter is typed in UTC+5: 11:59 local = 06:59 UTC -> includes the 07:00 UTC record
     assert "Показано 1–1 из 1" in http.get("/ui/audit?actor=tz-probe&date_from=2026-09-29T11:59").text
     assert "Нет записей" in http.get("/ui/audit?actor=tz-probe&date_from=2026-09-29T12:01").text
@@ -150,7 +151,10 @@ def test_settings_runtime_and_roles(http, coordinator, settings):
     csrf_v = re.search(r'name="csrf" value="([^"]+)"', http.get("/ui/login").text)
     token_v = csrf_v.group(1) if csrf_v else ""
     assert http.post("/ui/dispatch", data={"csrf": token_v, "pause": "0"}).status_code in (400, 403)
-    assert "Edit" not in http.get("/ui/tasks").text
+    tasks = http.get("/ui/tasks").text
+    assert "Синхронизировать" not in tasks and f'href="/ui/tasks/{SALES}"' in tasks
+    card = http.get(f"/ui/tasks/{SALES}").text  # a viewer opens the task card read-only
+    assert "Режим просмотра" in card and "<fieldset" in card and "disabled" in card and "Сохранить" not in card
 
 
 def test_formats_and_executions_page(http, coordinator, make_client):
@@ -161,7 +165,7 @@ def test_formats_and_executions_page(http, coordinator, make_client):
     for t in (SALES, HR, RISK):
         http.post(f"/api/v1/tasks/{t}/start", headers=h)
     _login(http)
-    page = http.get("/ui/executions?per_page=20").text
+    page = http.get("/ui/executions").text
     assert "Показано 1–3 из 3" in page and "js-range" in page
     from qlik_gateway.api.admin import to_local
     from qlik_gateway.models import utcnow

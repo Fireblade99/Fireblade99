@@ -1,7 +1,5 @@
-:root{--bg:#f6f7f9;--card:#fff;--fg:#1d2330;--muted:#6b7280;--line:#e3e6eb;--accent:#2f6fde;
+:root{color-scheme:light;--bg:#f6f7f9;--card:#fff;--fg:#1d2330;--muted:#6b7280;--line:#e3e6eb;--accent:#2f6fde;
 --ok:#15803d;--ok-bg:#dcfce7;--bad:#b91c1c;--bad-bg:#fee2e2;--warn:#a16207;--warn-bg:#fef3c7;--info:#1d4ed8;--info-bg:#dbeafe}
-@media (prefers-color-scheme:dark){:root{--bg:#12151b;--card:#1b1f27;--fg:#e5e7eb;--muted:#9ca3af;--line:#2b303b;--accent:#6b9cff;
---ok:#4ade80;--ok-bg:#12351f;--bad:#f87171;--bad-bg:#3b1515;--warn:#fbbf24;--warn-bg:#3a2e0b;--info:#93c5fd;--info-bg:#172554}}
 *{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg)}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 header{display:flex;align-items:center;gap:20px;padding:10px 20px;background:var(--card);border-bottom:1px solid var(--line);flex-wrap:wrap}
@@ -62,3 +60,18 @@ td.actions-cell{text-align:right;white-space:nowrap;width:1%}
 .hint{color:var(--muted);font-size:12px;margin-top:5px}
 .form-actions{display:flex;gap:8px;align-items:center}
 .filters .btn{display:inline-flex;align-items:center}
+
+/* lists: N visible rows, the rest scrolls; header row stays in place */
+.table-wrap.rows5,.table-wrap.scroll{overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.table-wrap.rows5{max-height:300px}
+.table-wrap.scroll{max-height:calc(100vh - 290px);min-height:240px}
+.table-wrap.rows5 table,.table-wrap.scroll table{border-radius:8px}
+.table-wrap.rows5 th,.table-wrap.scroll th{position:sticky;top:0;z-index:2;background:var(--card);box-shadow:inset 0 -1px 0 var(--line)}
+.row>.card.flat{padding:0;border:0;background:transparent}
+/* sortable columns */
+table.sortable th{cursor:pointer;user-select:none}
+table.sortable th:hover{color:var(--fg)}
+table.sortable th[data-dir=asc]::after{content:" ▲";font-size:10px}
+table.sortable th[data-dir=desc]::after{content:" ▼";font-size:10px}
+table.sortable th.nosort{cursor:default}
+.sub-actions{margin:-4px 0 12px;display:flex;gap:8px;flex-wrap:wrap}

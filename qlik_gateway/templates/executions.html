@@ -11,9 +11,9 @@
 <div class="presets small"><span class="muted">Быстро:</span> {% for label, q in presets %}<a href="?{{ q }}">{{ label }}</a>{% endfor %}</div>
 </form>
 {% include "_pagination.html" %}
-<div class="table-wrap"><table>{% include "_exec_head.html" %}
+<div class="table-wrap scroll"><table class="sortable">{% include "_exec_head.html" %}
 {% for e in rows %}{% include "_exec_row.html" %}{% else %}<tr><td colspan="9" class="muted">Ничего не найдено</td></tr>{% endfor %}
 </table></div>
-{% include "_pagination.html" %}
+
 {% endblock %}
 {% block scripts %}{% include "_daterange_js.html" %}{% endblock %}

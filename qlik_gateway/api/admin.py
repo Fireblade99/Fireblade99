@@ -431,7 +431,7 @@ def dashboard(request: Request, user: str = Depends(admin_user), db: Session = D
         .where(Execution.created_at >= day, *ec)
         .group_by(Execution.task_id, Execution.task_name)
         .order_by(func.count(Execution.id).desc())
-        .limit(10)
+        .limit(100)
     ).all()
     durations: dict[str, list[float]] = {}
     per_node: dict[str, dict] = {}
@@ -811,20 +811,23 @@ def tasks_sync(
     return back("/ui/tasks")
 
 
+@router.get("/tasks/{task_id}")
 @router.get("/tasks/{task_id}/edit")
-def task_edit_page(task_id: str, request: Request, user: str = Depends(require_editor), db: Session = Depends(get_db)):
+def task_page(task_id: str, request: Request, user: str = Depends(admin_user), db: Session = Depends(get_db)):
+    """The task card: everyone sees it (a team - only its tasks), editors and admins change it."""
     t = db.get(QlikTask, task_id) or _404()
+    sc = scope(request)
+    clients = [c for c in db.scalars(select(Client)) if sc is None or c.id in sc]
+    users = [c.name for c in clients if svc.client_can_task(c, t.id, t)]
+    if sc is not None and not users:
+        _404()
     last_runs = db.scalars(
-        select(Execution).where(Execution.task_id == task_id).order_by(Execution.id.desc()).limit(10)
+        select(Execution)
+        .where(Execution.task_id == task_id, *exec_conds(request))
+        .order_by(Execution.id.desc())
+        .limit(50)
     ).all()
-    clients = db.scalars(select(Client)).all()
-    return render(
-        request,
-        "task_edit.html",
-        t=t,
-        last_runs=last_runs,
-        users=[c.name for c in clients if svc.client_can_task(c, t.id, t)],
-    )
+    return render(request, "task_edit.html", t=t, last_runs=last_runs, users=users)
 
 
 @router.post("/tasks/{task_id}", dependencies=[Depends(check_csrf)])
@@ -1087,7 +1090,7 @@ def audit_page(
     return render(request, "audit.html", **_paginate(db, AuditLog, conds, f, page, per_page))
 
 
-PAGE_SIZES = (20, 50, 100)
+PAGE_SIZES = (50,)  # fixed page size; the table scrolls inside the page
 
 
 def _parse_dt(value: str) -> datetime | None:

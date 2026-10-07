@@ -1,9 +1,6 @@
 {# needs: page, pages, total, first_row, last_row, per_page, page_sizes, qs (filters incl. per_page), qs_base (filters without per_page) #}
 <div class="pager">
   <span class="muted small">{% if total %}Показано {{ first_row }}–{{ last_row }} из {{ total }}{% else %}Нет записей{% endif %}</span>
-  <span class="pager-size small">Строк на странице:
-    {% for n in page_sizes %}{% if n == per_page %}<b class="pg cur">{{ n }}</b>{% else %}<a class="pg" href="?{{ qs_base }}&per_page={{ n }}">{{ n }}</a>{% endif %}{% endfor %}
-  </span>
   {% if pages > 1 %}
   <span class="pager-nav">
     {% if page > 1 %}<a class="pg" href="?{{ qs }}&page=1" title="первая">«</a><a class="pg" href="?{{ qs }}&page={{ page - 1 }}">‹ назад</a>{% else %}<span class="pg off">«</span><span class="pg off">‹ назад</span>{% endif %}

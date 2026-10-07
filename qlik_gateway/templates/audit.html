@@ -15,7 +15,7 @@
 </form>
 
 {% include "_pagination.html" %}
-<div class="table-wrap"><table>
+<div class="table-wrap scroll"><table class="sortable">
 <tr><th>Время</th><th>Тип</th><th>Кто</th><th>Действие</th><th>Результат</th><th class="num">мс</th><th>IP</th><th>Задача / запуск</th><th>Метаданные</th><th>Сообщение</th></tr>
 {% for a in rows %}<tr>
 <td class="small">{{ a.ts|dt }}</td><td>{{ a.actor_type }}</td><td>{{ a.actor }}</td><td class="mono">{{ a.action }}<div class="muted">{{ a.method or "" }} {{ a.path or "" }}</div></td>
@@ -26,6 +26,6 @@
 <td class="small mono">{{ a.meta|tojson if a.meta else "" }}</td><td class="small">{{ a.message }}</td></tr>
 {% else %}<tr><td colspan="10" class="muted">Ничего не найдено</td></tr>{% endfor %}
 </table></div>
-{% include "_pagination.html" %}
+
 {% endblock %}
 {% block scripts %}{% include "_daterange_js.html" %}{% endblock %}
