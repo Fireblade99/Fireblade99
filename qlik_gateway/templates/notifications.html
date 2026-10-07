@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block content %}
+<h1>Уведомления</h1>
+<div class="sub-actions">{% if unread_ids %}<form class="inline" method="post" action="/ui/notifications/read"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Отметить все прочитанными</button></form>{% endif %}</div>
+<p class="muted">Критичные действия в шлюзе: стоп-кран, блокировки, остановка запусков, перевыпуск токенов, отключение пользователей — кто, когда, что и на что это повлияло в тот момент.</p>
+<div class="table-wrap scroll"><table class="sortable">
+<tr><th>Время</th><th>Кто</th><th>Действие</th><th>Что произошло</th><th>Причина</th><th>Повлияло на</th></tr>
+{% for n in items %}<tr class="notif{% if n.id in unread_ids %} unread{% endif %}">
+<td class="small nowrap">{{ n.ts|dt }}</td>
+<td>{{ n.actor }}</td>
+<td><span class="badge {{ 'bad' if n.severity == 'warn' else 'info' }}">{{ n.action }}</span>{% if n.id in unread_ids %} <span class="badge warn">new</span>{% endif %}</td>
+<td>{% if n.link %}<a href="{{ n.link }}">{{ n.title }}</a>{% else %}{{ n.title }}{% endif %}</td>
+<td class="small">{{ n.reason or "—" }}</td>
+<td class="small">{% if n.impact %}{% with impact=n.impact %}{% include "_impact.html" %}{% endwith %}{% else %}—{% endif %}</td>
+</tr>{% else %}<tr><td colspan="6" class="muted">Уведомлений нет</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

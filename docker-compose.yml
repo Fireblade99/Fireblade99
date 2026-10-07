@@ -1,0 +1,34 @@
+# Local/demo stack. For production point QGW_DATABASE_URL to your Postgres and
+# QGW_QLIK_MODE=jwt with the virtual proxy settings (see docs/qlik-setup.md).
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: qlik_gateway
+      POSTGRES_USER: qgw
+      POSTGRES_PASSWORD: qgw
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "qgw"]
+      interval: 5s
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      QGW_DATABASE_URL: postgresql+psycopg://qgw:qgw@db/qlik_gateway
+    ports: ["8080:8080"]
+    volumes: ["./secrets:/app/secrets:ro"]
+    depends_on: { db: { condition: service_healthy } }
+
+  worker:
+    build: .
+    command: ["qlik-gateway", "worker"]
+    env_file: .env
+    environment:
+      QGW_DATABASE_URL: postgresql+psycopg://qgw:qgw@db/qlik_gateway
+    volumes: ["./secrets:/app/secrets:ro"]
+    depends_on: { db: { condition: service_healthy } }
+
+volumes:
+  pgdata:
