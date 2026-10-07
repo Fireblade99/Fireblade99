@@ -65,6 +65,25 @@ try {
     & $py -m pip install --force-reinstall --no-deps --disable-pip-version-check --no-warn-script-location @idx $Src
     if ($LASTEXITCODE) { throw "pip failed (check -IndexUrl / -TrustedHost)" }
 
+    # launch scripts: always with -P, so a copy of the sources in the install folder is never imported
+    # instead of the installed package (scripts from old installs had no -P)
+    foreach ($f in "run-api.cmd", "run-worker.cmd", "manage.cmd") {
+        $path = Join-Path $InstallDir $f
+        if (Test-Path $path) {
+            $text = Get-Content $path -Raw
+            $fixed = $text -replace '(python\.exe")\s+-m ', '$1 -P -m '
+            if ($fixed -ne $text) { Set-Content $path $fixed -Encoding ascii -NoNewline; Write-Host "fixed $f (added -P)" }
+        }
+    }
+    # copies of the sources unpacked into the install folder by mistake: moved aside, never used
+    $stale = @("qlik_gateway", "deploy", "tests", "airflow", "build", "app\build") |
+        ForEach-Object { Join-Path $InstallDir $_ } | Where-Object { Test-Path $_ }
+    if ($stale) {
+        $to = Join-Path $InstallDir ("_stale\" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+        New-Item -ItemType Directory -Force $to | Out-Null
+        foreach ($d in $stale) { Move-Item $d $to -Force; Write-Warning "moved stray copy $d to $to" }
+    }
+
     # helper scripts in the install folder come from this version too
     foreach ($f in "restart.ps1", "restart.cmd") {
         Copy-Item (Join-Path $Src "deploy\windows\$f") $InstallDir -Force -ErrorAction SilentlyContinue
