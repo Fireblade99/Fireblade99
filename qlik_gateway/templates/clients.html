@@ -6,7 +6,7 @@
 <tr><th>Клиент</th><th>Состояние</th><th>Действия</th><th>Задачи</th><th>Лимиты</th><th>Токен выдан</th><th>Последний вызов</th></tr>
 {% for c in clients %}<tr>
 <td><a href="/ui/clients/{{ c.id }}">{{ c.name }}</a><div class="muted small">{{ c.owner_contact }}</div></td>
-<td>{% if c.enabled %}<span class="badge ok">активен</span>{% else %}<span class="badge bad">заблокирован</span><div class="small muted">{{ c.blocked_reason }}</div>{% endif %}</td>
+<td>{% if c.enabled %}<span class="badge ok">active</span>{% else %}<span class="badge bad">blocked</span><div class="small muted">{{ c.blocked_reason }}</div>{% endif %}</td>
 <td class="small">{{ c.allowed_actions|join(", ") }}</td>
 <td class="small">{% if "*" in c.allowed_tasks %}все{% else %}{{ c.allowed_tasks|length }}{% endif %}</td>
 <td class="small">{{ c.requests_per_minute }}/мин · {{ c.starts_per_hour }} запусков/ч · {{ c.max_concurrent }} параллельно</td>

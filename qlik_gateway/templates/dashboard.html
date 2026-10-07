@@ -4,10 +4,10 @@
 
 <div class="statusline">
 {% if paused %}
-  <span class="badge bad">ЗАПУСК В QLIK ПРИОСТАНОВЛЕН</span>
+  <span class="badge bad">dispatch: paused</span>
   <span class="small">кем: {{ paused.by }} · {{ paused.at|iso_dt }} · {{ paused.reason }}</span>
 {% else %}
-  <span class="badge ok">Запуск в Qlik активен</span>
+  <span class="badge ok">dispatch: active</span>
 {% endif %}
   <span class="small muted">одновременных reload: {{ rt.max_concurrent_executions }} · опрос Qlik раз в {{ rt.poll_interval_seconds|int }} с одним запросом</span>
 </div>
@@ -26,7 +26,7 @@
 {% set maxcalls = (load|map(attribute="calls")|max) if load else 0 %}
 {% for r in load %}<tr>
 <td><a href="/ui/clients/{{ r.client.id }}">{{ r.client.name }}</a><div class="muted small">{{ r.client.owner_contact }}</div></td>
-<td>{% if r.client.enabled %}<span class="badge ok">активен</span>{% else %}<span class="badge bad">заблокирован</span>{% endif %}</td>
+<td>{% if r.client.enabled %}<span class="badge ok">active</span>{% else %}<span class="badge bad">blocked</span>{% endif %}</td>
 <td class="num">{{ r.calls }}<div class="bar"><i style="width:{{ (100 * r.calls / maxcalls) if maxcalls else 0 }}%"></i></div></td>
 <td class="num">{{ r.rejected }}</td><td class="num">{{ r.starts }}</td>
 <td class="num">{% if r.ok %}<span style="color:var(--ok)">{{ r.ok }}</span>{% else %}0{% endif %}</td>
@@ -49,7 +49,7 @@
 {% if nodes %}<div class="table-wrap rows5"><table class="sortable">
 <tr><th>Нода Qlik</th><th class="num">Выполнено</th><th class="num">Успешно</th><th class="num">Ошибок</th><th class="num">Сейчас</th><th class="num">Σ время reload</th><th class="num">CPU %</th><th class="num">RAM, МБ<div class="muted small">занято / своб.</div></th></tr>
 {% for n in nodes %}{% set st = n.stats %}{% set h = n.health %}<tr>
-<td class="nowrap">{{ n.node }}{% if h and not h.ok %} <span class="badge bad">недоступна</span>{% elif h and h.saturated %} <span class="badge warn">saturated</span>{% endif %}</td>
+<td class="nowrap">{{ n.node }}{% if h and not h.ok %} <span class="badge bad">unavailable</span>{% elif h and h.saturated %} <span class="badge warn">saturated</span>{% endif %}</td>
 <td class="num">{{ st.runs if st else 0 }}</td>
 <td class="num">{{ st.ok if st else 0 }}</td>
 <td class="num">{% if st and st.fails %}<span style="color:var(--bad)">{{ st.fails }}</span>{% else %}0{% endif %}</td>

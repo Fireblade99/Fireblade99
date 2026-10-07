@@ -61,6 +61,48 @@
     wrap.style.maxHeight = Math.ceil(h + 2) + "px";
   }
 
+  // Critical actions: a form with data-confirm-title opens a dialog with the impact (a hidden element
+  // referenced by data-confirm-impact); data-confirm-word must be typed to enable the button;
+  // data-confirm-if="<checkbox selector>" asks only when that checkbox gets switched on.
+  function confirmDialog(form, submitter) {
+    var dlg = document.getElementById("confirm-dialog");
+    var word = form.getAttribute("data-confirm-word") || "";
+    dlg.querySelector(".cd-title").textContent = form.getAttribute("data-confirm-title");
+    var impact = form.getAttribute("data-confirm-impact");
+    var box = dlg.querySelector(".cd-impact");
+    box.innerHTML = impact && document.querySelector(impact) ? document.querySelector(impact).innerHTML : "";
+    var reason = form.querySelector("[name=reason],[name=blocked_reason]");
+    dlg.querySelector(".cd-reason").textContent = reason && reason.value ? "Причина: " + reason.value : "";
+    var input = dlg.querySelector(".cd-input"), ok = dlg.querySelector(".cd-ok");
+    dlg.querySelector(".cd-word-row").style.display = word ? "" : "none";
+    dlg.querySelector(".cd-word").textContent = word;
+    input.value = "";
+    ok.disabled = !!word;
+    input.oninput = function () { ok.disabled = input.value.trim() !== word; };
+    ok.onclick = function () {
+      dlg.close();
+      form.setAttribute("data-confirmed", "1");
+      if (form.requestSubmit) form.requestSubmit(submitter || undefined); else form.submit();
+    };
+    dlg.querySelector(".cd-cancel").onclick = function () { dlg.close(); };
+    dlg.showModal();
+    if (word) input.focus();
+  }
+
+  document.addEventListener("submit", function (e) {
+    var form = e.target;
+    if (!form.hasAttribute || !form.hasAttribute("data-confirm-title")) return;
+    if (form.getAttribute("data-confirmed") === "1") { form.removeAttribute("data-confirmed"); return; }
+    var cond = form.getAttribute("data-confirm-if");
+    if (cond) {
+      var cb = form.querySelector(cond);
+      if (!cb || !cb.checked || cb.defaultChecked) return; // asks only when switching it on
+    }
+    if (!form.reportValidity()) return;
+    e.preventDefault();
+    confirmDialog(form, e.submitter);
+  }, true);
+
   document.addEventListener("DOMContentLoaded", function () {
     Array.prototype.forEach.call(document.querySelectorAll("table.sortable"), makeSortable);
     var lists = document.querySelectorAll(".table-wrap.rows5");

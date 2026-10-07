@@ -1,0 +1,13 @@
+{# what a critical action affects; `impact` is a dict from services/notify.py #}
+<ul class="impact">
+{% if impact.client is defined %}<li>client: <b>{{ impact.client }}</b></li>{% endif %}
+{% if impact.task is defined %}<li>task: <b>{{ impact.task }}</b></li>{% endif %}
+{% if impact.execution is defined %}<li>execution: <b>#{{ impact.execution }}</b> · {{ impact.status }}</li>{% endif %}
+{% if impact.queued is defined %}<li>в очереди шлюза: <b>{{ impact.queued }}</b></li>{% endif %}
+{% if impact.in_qlik is defined %}<li>выполняется в Qlik: <b>{{ impact.in_qlik }}</b></li>{% endif %}
+{% if impact.shared %}<li>общих запусков (ждут и другие клиенты): <b>{{ impact.shared }}</b></li>{% endif %}
+{% if impact.requests is defined %}<li>запросов ждут этот запуск: <b>{{ impact.requests }}</b></li>{% endif %}
+{% if impact.tasks is defined %}<li>задач затронуто: <b>{{ impact.tasks }}</b></li>{% endif %}
+{% if impact.cancelled is defined %}<li>отменено в очереди: <b>{{ impact.cancelled }}</b>, остановлено в Qlik: <b>{{ impact.stopped }}</b></li>{% endif %}
+{% if impact.clients %}<li>клиенты: {% if impact.clients is mapping %}{% for k, v in impact.clients.items() %}<b>{{ k }}</b> ({{ v }}){% if not loop.last %}, {% endif %}{% endfor %}{% else %}<b>{{ impact.clients|join(", ") }}</b>{% endif %}</li>{% endif %}
+</ul>

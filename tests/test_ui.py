@@ -135,7 +135,7 @@ def test_settings_runtime_and_roles(http, coordinator, settings):
     )
     assert "Не сохранено" in bad.text
     http.post("/ui/dispatch", data={"csrf": csrf, "pause": "1", "reason": "test"})
-    assert "ПРИОСТАНОВЛЕН" in http.get("/ui/").text
+    assert "dispatch: paused" in http.get("/ui/").text
 
     # a viewer sees pages but cannot change anything
     with session_scope() as db:
@@ -145,7 +145,7 @@ def test_settings_runtime_and_roles(http, coordinator, settings):
     token = re.search(r'name="csrf" value="([^"]+)"', page).group(1)
     http.post("/ui/login", data={"username": "viewer", "password": "v-pass", "csrf": token})
     home = http.get("/ui/").text
-    assert "просмотр" in home and "/ui/settings" not in home
+    assert ">viewer<" in home and "/ui/settings" not in home
     assert http.get("/ui/settings").status_code == 403
     assert http.get("/ui/executions").status_code == 200
     csrf_v = re.search(r'name="csrf" value="([^"]+)"', http.get("/ui/login").text)
@@ -236,7 +236,43 @@ def test_execution_page_lists_every_start_request(http, coordinator, make_client
     page = http.get(f"/ui/executions/{first['execution_id']}").text
     section = page[page.index('id="requests"') : page.index("Сообщения Qlik")]
     assert section.count("test-a") == 1 and section.count("test-b") == 3
-    for label in ("создал запуск", "присоединён", "получил активный запуск", "отказ 409"):
+    for label in (">created<", ">joined<", ">reused<", ">rejected<"):
         assert label in section
     assert "уже перезагружалась в Qlik" in section and "dag_a" in section and "who:" in section
     assert ">+2</a>" in http.get("/ui/executions").text  # collapsed + reused
+
+
+def test_critical_actions_confirmation_and_notifications(http, coordinator, make_client, mock):
+    from qlik_gateway.db import session_scope
+    from qlik_gateway.models import Notification
+
+    mock.min_duration = mock.max_duration = 60
+    cid, h = make_client("team-n")
+    http.post(f"/api/v1/tasks/{SALES}/start", headers=h)
+    csrf = _login(http)
+    settings_page = http.get("/ui/settings").text
+    # the stop switch asks for STOP and shows what it affects
+    assert 'data-confirm-word="STOP"' in settings_page and 'id="impact-dispatch"' in settings_page
+    assert "в очереди шлюза: <b>1</b>" in settings_page and "team-n" in settings_page
+    client_page = http.get(f"/ui/clients/{cid}").text
+    assert 'data-confirm-word="team-n"' in client_page and 'id="impact-client"' in client_page
+
+    http.post("/ui/dispatch", data={"csrf": csrf, "pause": "1", "reason": "incident"})
+    http.post(f"/ui/clients/{cid}/block", data={"csrf": csrf, "reason": "leak", "cancel_queued": "1"})
+    with session_scope() as db:
+        rows = db.query(Notification).order_by(Notification.id).all()
+        assert [n.action for n in rows] == ["dispatch.pause", "client.block"]
+        assert rows[0].impact["queued"] == 1 and rows[0].impact["clients"] == {"team-n": 1}
+        assert rows[1].impact["client"] == "team-n" and rows[1].impact["cancelled"] == 1
+        assert rows[0].read_by == ["admin"]  # the author has seen it
+
+    page = http.get("/ui/notifications").text
+    assert "dispatch.pause" in page and "incident" in page and "leak" in page
+    with session_scope() as db:
+        db.add(Notification(actor="someone", action="dispatch.resume", title="x", read_by=["someone"]))
+    assert (
+        'href="/ui/notifications"' in http.get("/ui/").text
+        and '<span class="badge bad">1</span>' in http.get("/ui/").text
+    )
+    http.post("/ui/notifications/read", data={"csrf": csrf})
+    assert '<span class="badge bad">1</span>' not in http.get("/ui/").text

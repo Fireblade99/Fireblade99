@@ -4,12 +4,12 @@
 <div class="card"><table>
 <tr><th>ID</th><td class="mono">{{ t.id }}</td></tr>
 <tr><th>Приложение</th><td>{{ t.app_name }} <span class="muted small">{{ t.stream_name }}</span></td></tr>
-<tr><th>В Qlik</th><td>{% if not t.present_in_qlik %}<span class="badge bad">удалена</span>{% elif t.enabled_in_qlik %}<span class="badge ok">enabled</span>{% else %}<span class="badge muted">disabled</span>{% endif %}</td></tr>
+<tr><th>В Qlik</th><td>{% if not t.present_in_qlik %}<span class="badge bad">deleted</span>{% elif t.enabled_in_qlik %}<span class="badge ok">enabled</span>{% else %}<span class="badge muted">disabled</span>{% endif %}</td></tr>
 <tr><th>Кому доступна</th><td>{{ users|join(", ") or "—" }}</td></tr>
 <tr><th>Синхронизирована</th><td>{{ t.synced_at|dt }}</td></tr>
 </table></div>
 
-<form class="card" method="post" action="/ui/tasks/{{ t.id }}">
+<template id="impact-task">{% include "_impact.html" %}</template><form class="card" method="post" action="/ui/tasks/{{ t.id }}" data-confirm-title="Заблокировать задачу «{{ t.name }}» для всех клиентов?" data-confirm-word="BLOCK" data-confirm-impact="#impact-task" data-confirm-if="input[name=blocked]">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <h2 style="margin-top:0">Ограничения</h2>
 {% if not can_edit %}<div class="muted small">Режим просмотра: изменения доступны администратору.</div>{% endif %}

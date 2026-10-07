@@ -82,7 +82,7 @@ def test_ad_login_roles_and_denials(http, ad):
     login(http, "kuznetsov", "pw")  # editor: sees settings and logs, may re-sync tasks, changes nothing
     settings_page = http.get("/ui/settings").text
     assert "Режим просмотра" in settings_page and "Стоп-кран: пауза" not in settings_page
-    assert "редактор" in http.get("/ui/").text and "Синхронизировать" in http.get("/ui/tasks").text
+    assert ">editor<" in http.get("/ui/").text and "Синхронизировать" in http.get("/ui/tasks").text
     assert http.get("/ui/clients/new").status_code == 403
     with session_scope() as db:
         uid = db.query(AdminUser).filter_by(username="ivanov").one().id
@@ -139,7 +139,7 @@ def test_team_sees_only_its_clients(http, coordinator, make_client, mock, ad):
 
     login(http, "sidorov", "pw")
     page = http.get("/ui/").text
-    assert "команда" in page
+    assert ">team<" in page
     assert "/ui/clients/settings" not in page and http.get("/ui/settings").status_code == 403
 
     rows = http.get("/ui/executions").text
@@ -150,7 +150,7 @@ def test_team_sees_only_its_clients(http, coordinator, make_client, mock, ad):
 
     # ml's run: visible only because dwh's request was refused by it; ml's details stay hidden
     other = http.get(f"/ui/executions/{foreign}").text
-    assert "запуск другой команды" in other and "отказ 409" in other and ">ml<" not in other
+    assert "запуск другой команды" in other and ">rejected<" in other and ">ml<" not in other
     tasks = http.get("/ui/tasks").text
     assert "Reload HR Dashboard" in tasks and "Reload Risk" not in tasks
 

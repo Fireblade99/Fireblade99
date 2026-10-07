@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% block content %}
-<h1>{% if is_new %}Новый клиент{% else %}Клиент «{{ c.name }}» {% if c.enabled %}<span class="badge ok">активен</span>{% else %}<span class="badge bad">заблокирован</span>{% endif %}{% endif %}</h1>
+<h1>{% if is_new %}Новый клиент{% else %}Клиент «{{ c.name }}» {% if c.enabled %}<span class="badge ok">active</span>{% else %}<span class="badge bad">blocked</span>{% endif %}{% endif %}</h1>
 
 {% if new_token %}<div class="card"><b>Токен клиента — показывается один раз.</b> Передайте его владельцу (например, в Airflow Connection <span class="mono">qlik_gateway_default</span>, поле password):
 <div class="token mono" style="margin-top:8px">{{ new_token }}</div></div>{% endif %}
@@ -8,7 +8,8 @@
 <div class="card" style="display:flex;gap:12px;flex-wrap:wrap;align-items:end">
 {% if not can_edit %}<div class="muted">Режим просмотра: изменения доступны администратору.</div>
 {% elif c.enabled %}
-<form method="post" action="/ui/clients/{{ c.id }}/block" onsubmit="return confirm('Заблокировать клиента {{ c.name }}?')">
+<template id="impact-client">{% include "_impact.html" %}</template>
+<form method="post" action="/ui/clients/{{ c.id }}/block" data-confirm-title="Заблокировать клиента {{ c.name }}? Его токен сразу перестанет работать" data-confirm-word="{{ c.name }}" data-confirm-impact="#impact-client">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <label>Заблокировать доступ</label><input type="text" name="reason" placeholder="причина" required>
 <div><span class="check"><input type="checkbox" name="cancel_queued" value="1" checked> отменить его запросы в очереди</span>
@@ -18,7 +19,7 @@
 <div>Причина блокировки: <b>{{ c.blocked_reason or "—" }}</b></div>
 <form method="post" action="/ui/clients/{{ c.id }}/unblock"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="primary">Разблокировать</button></form>
 {% endif %}
-{% if is_admin %}<form method="post" action="/ui/clients/{{ c.id }}/rotate" onsubmit="return confirm('Старый токен сразу перестанет работать. Продолжить?')" style="margin-left:auto">
+{% if is_admin %}<form method="post" action="/ui/clients/{{ c.id }}/rotate" style="margin-left:auto" data-confirm-title="Перевыпустить токен клиента {{ c.name }}? Старый токен сразу перестанет работать — Airflow этого клиента упадёт, пока connection не обновят" data-confirm-word="{{ c.name }}" data-confirm-impact="#impact-client">
 <input type="hidden" name="csrf" value="{{ csrf }}"><button>Перевыпустить токен</button></form>{% endif %}
 <a class="btn" href="/ui/executions?client_id={{ c.id }}">Запуски</a><a class="btn" href="/ui/audit?actor={{ c.name }}">Журнал</a>
 </div>
@@ -37,7 +38,7 @@
 <label>Разрешённые задачи Qlik</label>
 {% if client_prop %}<div class="muted small">Основной способ — в QMC: приложению ставится custom property <b>{{ client_prop }}</b> = <b>{{ c.name or "имя клиента" }}</b>, и его задачи становятся доступны клиенту автоматически (отмечены «из QMC»). Галочки ниже — дополнительная ручная выдача.</div>{% endif %}
 <span class="check"><input type="checkbox" name="all_tasks" value="1" {% if "*" in c.allowed_tasks %}checked{% endif %}> все задачи из каталога шлюза</span>
-<div class="tasklist">{% for t in tasks %}<div><span class="check"><input type="checkbox" name="tasks" value="{{ t.id }}" {% if t.id in c.allowed_tasks %}checked{% endif %}> {{ t.name }} <span class="muted small">{{ t.app_name }} · {{ t.stream_name }}</span>{% if t.id in qlik_granted %} <span class="badge info">из QMC</span>{% endif %}</span></div>{% else %}<span class="muted">Каталог пуст — синхронизируйте задачи на странице «Задачи Qlik»</span>{% endfor %}</div>
+<div class="tasklist">{% for t in tasks %}<div><span class="check"><input type="checkbox" name="tasks" value="{{ t.id }}" {% if t.id in c.allowed_tasks %}checked{% endif %}> {{ t.name }} <span class="muted small">{{ t.app_name }} · {{ t.stream_name }}</span>{% if t.id in qlik_granted %} <span class="badge info">qmc</span>{% endif %}</span></div>{% else %}<span class="muted">Каталог пуст — синхронизируйте задачи на странице «Задачи Qlik»</span>{% endfor %}</div>
 <label>Доп. ID задач (по одному в строке)</label>
 <textarea name="extra_tasks">{% for t in c.allowed_tasks if t != "*" and t not in tasks|map(attribute="id")|list %}{{ t }}
 {% endfor %}</textarea>

@@ -75,3 +75,11 @@ table.sortable th[data-dir=asc]::after{content:" ▲";font-size:10px}
 table.sortable th[data-dir=desc]::after{content:" ▼";font-size:10px}
 table.sortable th.nosort{cursor:default}
 .sub-actions{margin:-4px 0 12px;display:flex;gap:8px;flex-wrap:wrap}
+
+/* confirmation dialog for critical actions */
+dialog.cd{border:1px solid var(--line);border-radius:10px;padding:18px 20px;max-width:520px;width:calc(100% - 32px);color:var(--fg);background:var(--card)}
+dialog.cd::backdrop{background:rgba(15,23,42,.45)}
+.cd-title{font-weight:700;font-size:16px;margin-bottom:8px}
+ul.impact{margin:6px 0 8px;padding-left:18px}ul.impact li{margin:2px 0}
+.cd-reason{margin:4px 0 8px}
+.notif.unread{background:#fff8e6}

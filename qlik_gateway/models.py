@@ -229,6 +229,23 @@ class AdminUser(Base):
     client_ids: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
 
 
+class Notification(Base):
+    """A critical action shown to administrators in the UI: who/when/what and what it affected."""
+
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ts: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    actor: Mapped[str] = mapped_column(String(200), default="")
+    action: Mapped[str] = mapped_column(String(50))  # dispatch.pause, client.block, execution.cancel, ...
+    severity: Mapped[str] = mapped_column(String(10), default="warn")  # warn / info
+    title: Mapped[str] = mapped_column(String(500), default="")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    impact: Mapped[dict] = mapped_column(JSON, default=dict)  # snapshot at the moment of the action
+    link: Mapped[str] = mapped_column(String(300), default="")
+    read_by: Mapped[list] = mapped_column(JSON, default=list)  # usernames that have seen it
+
+
 class KV(Base):
     """Small key/value store: global switches, worker lease, last sync times."""
 

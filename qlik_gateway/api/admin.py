@@ -22,6 +22,7 @@ from ..models import (
     ExecStatus,
     Execution,
     NodeHealth,
+    Notification,
     QlikTask,
     normalize_on_active,
     utcnow,
@@ -29,7 +30,7 @@ from ..models import (
 from ..qlik import QlikError
 from ..security import generate_client_token, verify_password
 from ..services import executions as svc
-from ..services import ldap_auth, runtime
+from ..services import ldap_auth, notify, runtime
 from ..services.audit import audit
 from ..services.errors import ServiceError
 from ..services.kv import DISPATCH_PAUSED, dispatch_paused, set_value
@@ -77,20 +78,12 @@ templates.env.filters["on_active"] = lambda v: normalize_on_active(v) or ""
 templates.env.filters["dt_input"] = lambda d: to_local(d).strftime("%Y-%m-%dT%H:%M") if d else ""
 templates.env.globals["tz_label"] = tz_label
 
-_REQUEST_RESULTS = {
-    "new": ("создал запуск", "ok", "задача была свободна — запущена по этому запросу"),
-    "queued": (
-        "новый запуск после активного",
-        "ok",
-        "on_active=queue: задача перезагружалась, поставлен запуск после неё",
-    ),
-    "collapsed": ("присоединён", "muted", "запуск ещё ждал в очереди шлюза — запрос схлопнут в него"),
-    "reused": (
-        "получил активный запуск",
-        "warn",
-        "on_active=reuse: возвращён уже идущий reload, новых данных в нём может не быть",
-    ),
-    "rejected": ("отказ 409", "bad", ""),
+_REQUEST_RESULTS = {  # result: (value shown, badge, explanation)
+    "new": ("created", "ok", "задача была свободна — запущена по этому запросу"),
+    "queued": ("queued", "ok", "on_active=queue: задача перезагружалась, поставлен запуск после неё"),
+    "collapsed": ("joined", "muted", "запуск ещё ждал в очереди шлюза — запрос схлопнут в него"),
+    "reused": ("reused", "warn", "on_active=reuse: возвращён уже идущий reload, новых данных в нём может не быть"),
+    "rejected": ("rejected", "bad", ""),
 }
 
 
@@ -107,7 +100,7 @@ def request_result(a: AuditLog) -> tuple[str, str, str]:
         return label, cls, text
     if a.outcome != "ok":  # other refusals (limits, rights) or requests from before 0.4.3
         return f"{a.outcome} {a.status_code or ''}".strip(), "bad", a.message or ""
-    return ("присоединён" if "dedup" in (a.message or "") else "принят"), "muted", a.message or ""
+    return ("joined" if "dedup" in (a.message or "") else "accepted"), "muted", a.message or ""
 
 
 templates.env.globals["request_result"] = request_result
@@ -217,6 +210,12 @@ def render(request: Request, name: str, **ctx) -> HTMLResponse:
     ctx["is_admin"] = is_admin(request)
     ctx["can_edit"] = can_edit(request)
     ctx["can_view_settings"] = can_view_settings(request)
+    ctx["unread"] = 0
+    if is_admin(request):
+        from ..db import session_scope
+
+        with session_scope() as db:
+            ctx["unread"] = notify.unread_count(db, request.session.get("admin", ""))
     ctx["role"] = request.session.get("role")
     ctx["display"] = request.session.get("display")
     ctx["csrf"] = csrf_token(request)
@@ -504,6 +503,7 @@ def settings_page(request: Request, user: str = Depends(require_editor), db: Ses
         },
         limits=runtime.LIMITS,
         users=db.scalars(select(AdminUser).order_by(AdminUser.source, AdminUser.username)).all(),
+        impact=notify.dispatch_impact(db),
         client_names={c.id: c.name for c in db.scalars(select(Client))},
         ldap_on=ldap_auth.enabled(s),
         ldap_url=s.ldap_url,
@@ -521,6 +521,14 @@ def user_toggle(user_id: int, request: Request, user: str = Depends(require_admi
         return back("/ui/settings")
     u.enabled = not u.enabled
     admin_audit(db, request, "user.enable" if u.enabled else "user.disable", meta={"username": u.username})
+    notify.notify(
+        db,
+        actor=user,
+        action="user.enable" if u.enabled else "user.disable",
+        title=f"UI user {u.username} {'enabled' if u.enabled else 'disabled'}",
+        link="/ui/settings",
+        severity="info" if u.enabled else "warn",
+    )
     flash(request, f"Пользователь {u.username} {'включён' if u.enabled else 'отключён'}")
     return back("/ui/settings")
 
@@ -533,13 +541,32 @@ def toggle_dispatch(
     user: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    impact = notify.dispatch_impact(db)
     if pause == "1":
         set_value(db, DISPATCH_PAUSED, {"by": user, "reason": reason, "at": utcnow().isoformat()})
         admin_audit(db, request, "dispatch.pause", message=reason)
+        notify.notify(
+            db,
+            actor=user,
+            action="dispatch.pause",
+            title="Stop switch: dispatch to Qlik paused",
+            reason=reason,
+            impact=impact,
+            link="/ui/settings",
+        )
         flash(request, "Запуск задач в Qlik приостановлен. Новые запросы копятся в очереди.", "warn")
     else:
         set_value(db, DISPATCH_PAUSED, None)
         admin_audit(db, request, "dispatch.resume")
+        notify.notify(
+            db,
+            actor=user,
+            action="dispatch.resume",
+            title="Dispatch to Qlik resumed",
+            impact=impact,
+            link="/ui/settings",
+            severity="info",
+        )
         flash(request, "Запуск задач возобновлён")
     return back("/ui/settings")
 
@@ -692,6 +719,7 @@ def client_edit_page(client_id: int, request: Request, user: str = Depends(admin
         is_new=False,
         new_token=new_token and new_token["token"],
         recent_audit=recent_audit,
+        impact=notify.client_impact(db, c),
     )
 
 
@@ -734,6 +762,7 @@ def client_block(
     backend=Depends(get_backend),
 ):
     c = db.get(Client, client_id) or _404()
+    impact = notify.client_impact(db, c)
     c.enabled = False
     c.blocked_reason = reason
     cancelled = stopped = 0
@@ -753,6 +782,15 @@ def client_block(
     admin_audit(
         db, request, "client.block", client_id=c.id, message=reason, meta={"cancelled": cancelled, "stopped": stopped}
     )
+    notify.notify(
+        db,
+        actor=user,
+        action="client.block",
+        title=f"Client {c.name} blocked",
+        reason=reason,
+        impact=impact | {"cancelled": cancelled, "stopped": stopped},
+        link=f"/ui/clients/{c.id}",
+    )
     request.session.setdefault(
         "flash",
         {"msg": f"Клиент заблокирован. Отменено в очереди: {cancelled}, остановлено: {stopped}", "kind": "warn"},
@@ -761,13 +799,19 @@ def client_block(
 
 
 @router.post("/clients/{client_id}/unblock", dependencies=[Depends(check_csrf)])
-def client_unblock(
-    client_id: int, request: Request, user: str = Depends(require_editor), db: Session = Depends(get_db)
-):
+def client_unblock(client_id: int, request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)):
     c = db.get(Client, client_id) or _404()
     c.enabled = True
     c.blocked_reason = ""
     admin_audit(db, request, "client.unblock", client_id=c.id)
+    notify.notify(
+        db,
+        actor=user,
+        action="client.unblock",
+        title=f"Client {c.name} unblocked",
+        severity="info",
+        link=f"/ui/clients/{c.id}",
+    )
     flash(request, "Клиент разблокирован")
     return back(f"/ui/clients/{client_id}")
 
@@ -775,9 +819,18 @@ def client_unblock(
 @router.post("/clients/{client_id}/rotate", dependencies=[Depends(check_csrf)])
 def client_rotate(client_id: int, request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)):
     c = db.get(Client, client_id) or _404()
+    impact = notify.client_impact(db, c)
     token, prefix, token_hash = generate_client_token()
     c.token_prefix, c.token_hash, c.token_created_at = prefix, token_hash, utcnow()
     admin_audit(db, request, "client.rotate_token", client_id=c.id)
+    notify.notify(
+        db,
+        actor=user,
+        action="client.rotate_token",
+        title=f"Token of client {c.name} rotated: the old one stopped working",
+        impact=impact,
+        link=f"/ui/clients/{c.id}",
+    )
     request.session["new_token"] = {"client_id": c.id, "token": token}
     return back(f"/ui/clients/{client_id}")
 
@@ -833,7 +886,7 @@ def task_page(task_id: str, request: Request, user: str = Depends(admin_user), d
         .order_by(Execution.id.desc())
         .limit(50)
     ).all()
-    return render(request, "task_edit.html", t=t, last_runs=last_runs, users=users)
+    return render(request, "task_edit.html", t=t, last_runs=last_runs, users=users, impact=notify.task_impact(db, t))
 
 
 @router.post("/tasks/{task_id}", dependencies=[Depends(check_csrf)])
@@ -848,8 +901,20 @@ def task_update(
     db: Session = Depends(get_db),
 ):
     t = db.get(QlikTask, task_id) or _404()
+    was_blocked = t.blocked
     t.blocked = bool(blocked)
     t.blocked_reason = blocked_reason if t.blocked else ""
+    if t.blocked != was_blocked:
+        notify.notify(
+            db,
+            actor=user,
+            action="task.block" if t.blocked else "task.unblock",
+            title=f"Task {t.name} {'blocked' if t.blocked else 'unblocked'}",
+            reason=t.blocked_reason,
+            impact=notify.task_impact(db, t),
+            link=f"/ui/tasks/{t.id}",
+            severity="warn" if t.blocked else "info",
+        )
     t.min_interval_seconds = max(0, min_interval_seconds)
     t.if_running_policy = _policy(if_running_policy)
     admin_audit(
@@ -993,6 +1058,7 @@ def execution_page(execution_id: int, request: Request, user: str = Depends(admi
         start_requests=start_requests,
         active=ex.status in ExecStatus.ACTIVE,
         can_cancel=_can_cancel(request, ex),
+        impact=notify.execution_impact(db, ex) if _can_cancel(request, ex) else {},
     )
 
 
@@ -1033,15 +1099,41 @@ def execution_cancel(
 ):
     ex = db.get(Execution, execution_id) or _404()
     if not _can_cancel(request, ex):
-        raise HTTPException(
-            403, "Недостаточно прав: отменить можно только свой запуск, к которому никто не присоединился"
-        )
+        raise HTTPException(403, "Недостаточно прав: отменять запуски может только администратор")
+    impact = notify.execution_impact(db, ex)
     try:
         svc.cancel(db, backend, ex, actor_type="admin", actor=user)
+        notify.notify(
+            db,
+            actor=user,
+            action="execution.cancel",
+            title=f"Execution #{ex.id} ({ex.task_name}) "
+            + ("cancelled" if impact["status"] == "QUEUED" else "stopped in Qlik"),
+            impact=impact,
+            link=f"/ui/executions/{ex.id}",
+        )
         flash(request, "Отмена отправлена")
     except (ServiceError, QlikError) as e:
         flash(request, str(e), "bad")
     return back(f"/ui/executions/{execution_id}")
+
+
+# ------------------------------------------------------------------------------------------
+# notifications (admins)
+# ------------------------------------------------------------------------------------------
+@router.get("/notifications")
+def notifications_page(request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)):
+    items = db.scalars(select(Notification).order_by(Notification.id.desc()).limit(200)).all()
+    unread_ids = {n.id for n in items if user not in (n.read_by or [])}
+    return render(request, "notifications.html", items=items, unread_ids=unread_ids)
+
+
+@router.post("/notifications/read", dependencies=[Depends(check_csrf)])
+def notifications_read(request: Request, user: str = Depends(require_admin), db: Session = Depends(get_db)):
+    for n in db.scalars(select(Notification).order_by(Notification.id.desc()).limit(200)):
+        if user not in (n.read_by or []):
+            n.read_by = [*(n.read_by or []), user]
+    return back("/ui/notifications")
 
 
 # ------------------------------------------------------------------------------------------
