@@ -40,23 +40,43 @@ function Stop-Gateway {
 }
 
 
-Write-Host "==> stop"
-foreach ($n in "QlikGateway-API", "QlikGateway-Worker") { Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue }
-Stop-Gateway
+$tasks = "QlikGateway-API", "QlikGateway-Worker"
+# scripts unpacked from a downloaded zip are marked "from the internet": no security prompt for them
+Get-ChildItem (Join-Path $Src "deploy\windows") -Filter *.ps1 -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
 
-Write-Host "==> install code from $Src"
-$idx = @()
-if ($IndexUrl) { $idx += @("--index-url", $IndexUrl) }
-if ($TrustedHost) { $idx += @("--trusted-host", $TrustedHost) }
-# 1. new dependencies of this version, if any (already installed ones are kept)
-& $py -m pip install --disable-pip-version-check --no-warn-script-location @idx $Src
-if ($LASTEXITCODE) { throw "pip failed (check -IndexUrl / -TrustedHost)" }
-# 2. the gateway code itself, even if the version number did not change
-& $py -m pip install --force-reinstall --no-deps --disable-pip-version-check --no-warn-script-location @idx $Src
-if ($LASTEXITCODE) { throw "pip failed (check -IndexUrl / -TrustedHost)" }
+Write-Host "==> stop"
+# the tasks restart a stopped gateway every minute (that is how it survives a crash): switch them off for
+# the update, otherwise the OLD code is started again while pip is still installing the new one
+foreach ($n in $tasks) {
+    Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
+    Disable-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue | Out-Null
+}
+try {
+    Stop-Gateway
+
+    Write-Host "==> install code from $Src"
+    $idx = @()
+    if ($IndexUrl) { $idx += @("--index-url", $IndexUrl) }
+    if ($TrustedHost) { $idx += @("--trusted-host", $TrustedHost) }
+    # 1. new dependencies of this version, if any (already installed ones are kept)
+    & $py -m pip install --disable-pip-version-check --no-warn-script-location @idx $Src
+    if ($LASTEXITCODE) { throw "pip failed (check -IndexUrl / -TrustedHost)" }
+    # 2. the gateway code itself, even if the version number did not change
+    & $py -m pip install --force-reinstall --no-deps --disable-pip-version-check --no-warn-script-location @idx $Src
+    if ($LASTEXITCODE) { throw "pip failed (check -IndexUrl / -TrustedHost)" }
+
+    # helper scripts in the install folder come from this version too
+    foreach ($f in "restart.ps1", "restart.cmd") {
+        Copy-Item (Join-Path $Src "deploy\windows\$f") $InstallDir -Force -ErrorAction SilentlyContinue
+    }
+    Get-ChildItem $InstallDir -Filter *.ps1 | Unblock-File -ErrorAction SilentlyContinue
+}
+finally {
+    foreach ($n in $tasks) { Enable-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue | Out-Null }
+}
 
 Write-Host "==> start"
-foreach ($n in "QlikGateway-API", "QlikGateway-Worker") { Start-ScheduledTask -TaskName $n }
+foreach ($n in $tasks) { Start-ScheduledTask -TaskName $n }
 # the API needs a few seconds (more on a busy server): wait up to 60 s, then show the log instead of failing
 $v = $null
 Write-Host -NoNewline "waiting for the gateway on port $Port "

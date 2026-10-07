@@ -23,6 +23,12 @@ function Stop-Gateway {
     }
 }
 
-foreach ($n in "QlikGateway-API", "QlikGateway-Worker") { Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue }
-Stop-Gateway
-foreach ($n in "QlikGateway-API", "QlikGateway-Worker") { Start-ScheduledTask -TaskName $n; Write-Host "$n started" }
+$tasks = "QlikGateway-API", "QlikGateway-Worker"
+# the tasks restart a stopped gateway by themselves: switch them off while stopping
+foreach ($n in $tasks) {
+    Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
+    Disable-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue | Out-Null
+}
+try { Stop-Gateway }
+finally { foreach ($n in $tasks) { Enable-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue | Out-Null } }
+foreach ($n in $tasks) { Start-ScheduledTask -TaskName $n; Write-Host "$n started" }
