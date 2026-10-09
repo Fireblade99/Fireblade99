@@ -354,9 +354,18 @@ const upPct = (max, req) => max != null && req ? Math.round((max / req - 1) * 10
 function actions(w) {
   // Shortage first: it is the urgent one
   const up = [], down = [];
-  const memUp = upPct(w.mem_max, w.mem_req);
-  if (w.mem_action === "up") up.push(`<span class="badge b-under" title="Пик памяти выше request или были OOM — увеличьте request/limit">${icon("i-warn")}Добавить память${memUp > 0 ? ` +${memUp}%` : ""}</span>`);
-  if (w.cpu_action === "up") up.push(`<span class="badge b-under" title="Пик CPU выше request больше допуска — увеличьте request">${icon("i-warn")}Добавить CPU +${upPct(w.cpu_max, w.cpu_req)}%</span>`);
+  const memWhy = {
+    over_request: [`+${upPct(w.mem_max, w.mem_req)}%`, "Пик памяти выше request"],
+    near_request: ["впритык", `Пик памяти ${Math.round(w.mem_max / w.mem_req * 100)}% от request — запаса нет`],
+    at_limit: ["у limit", "Пик памяти упирается в limit — риск OOM"],
+    oom: ["OOM", "Были запуски, убитые по OOM"],
+  }[w.mem_flag] || ["", ""];
+  const cpuWhy = {
+    over_request: [`+${upPct(w.cpu_max, w.cpu_req)}%`, "Пик CPU выше request больше допуска"],
+    at_limit: ["у limit", "Пик CPU упирается в limit — задачу троттлят"],
+  }[w.cpu_flag] || ["", ""];
+  if (w.mem_action === "up") up.push(`<span class="badge b-under" title="${memWhy[1]}">${icon("i-warn")}Добавить память${memWhy[0] ? " · " + memWhy[0] : ""}</span>`);
+  if (w.cpu_action === "up") up.push(`<span class="badge b-under" title="${cpuWhy[1]}">${icon("i-warn")}Добавить CPU${cpuWhy[0] ? " · " + cpuWhy[0] : ""}</span>`);
   if (w.mem_action === "down") down.push(`<span class="badge b-over" title="${pct(w.mem_waste_pct)} запрошенной памяти не используется даже на пике">${icon("i-down-arrow")}Сократить память ${pct(w.mem_waste_pct)}</span>`);
   if (w.cpu_action === "down") down.push(`<span class="badge b-over" title="${pct(w.cpu_waste_pct)} запрошенного CPU не используется даже на пике">${icon("i-down-arrow")}Сократить CPU ${pct(w.cpu_waste_pct)}</span>`);
   const out = up.concat(down);
@@ -371,10 +380,16 @@ function notesFor(w) {
   const thr = report.waste_threshold, out = [];
   if (w.oom_runs) out.push(["crit", `OOMKilled в ${w.oom_runs} из ${w.runs} запусков — контейнер упёрся в limit памяти (${gib(w.mem_lim)}), увеличьте limit`]);
   const tol = Math.round((report.cpu_tolerance ?? 0.2) * 100);
-  if (w.mem_action === "up" && w.mem_max > w.mem_req)
+  if (w.mem_flag === "over_request")
     out.push(["crit", `Память: пик ${gib(w.mem_max)} выше request ${gib(w.mem_req)} — под могут вытеснить или убить по OOM, увеличьте request`]);
-  if (w.cpu_action === "up")
+  if (w.mem_flag === "near_request")
+    out.push(["crit", `Память: пик ${gib(w.mem_max)} — это ${Math.round(w.mem_max / w.mem_req * 100)}% от request ${gib(w.mem_req)}, запаса нет — увеличьте request`]);
+  if (w.mem_flag === "at_limit")
+    out.push(["crit", `Память: пик ${gib(w.mem_max)} упирается в limit ${gib(w.mem_lim)} — следующий рост данных закончится OOM, увеличьте limit и request. Реальная потребность может быть выше рекомендации: пик ограничен самим limit`]);
+  if (w.cpu_flag === "over_request")
     out.push(["warn", `CPU: пик ${cores(w.cpu_max)} выше request ${cores(w.cpu_req)} больше чем на ${tol}% — задача упирается в CPU, увеличьте request`]);
+  if (w.cpu_flag === "at_limit")
+    out.push(["warn", `CPU: пик ${cores(w.cpu_max)} упирается в limit ${cores(w.cpu_lim)} — задачу троттлят, она работает дольше, чем могла бы; увеличьте limit (или уберите его). Реальная потребность может быть выше рекомендации: пик ограничен самим limit`]);
   else if (w.cpu_max != null && w.cpu_req != null && w.cpu_max > w.cpu_req)
     out.push(["info", `CPU: пик ${cores(w.cpu_max)} немного выше request ${cores(w.cpu_req)} — в пределах допуска ${tol}%, это нормально`]);
   if (w.mem_action === "down")
@@ -526,7 +541,8 @@ function renderDetail(w) {
     `  requests:`,
     w.cpu_rec != null ? `    cpu: ${k8sCpu(w.cpu_rec)}` : null,
     w.mem_rec != null ? `    memory: ${k8sMem(w.mem_rec)}` : null,
-    w.mem_rec_lim != null ? `  limits:` : null,
+    w.mem_rec_lim != null || (w.cpu_lim != null && w.cpu_rec_lim != null) ? `  limits:` : null,
+    w.cpu_lim != null && w.cpu_rec_lim != null ? `    cpu: ${k8sCpu(w.cpu_rec_lim)}` : null,
     w.mem_rec_lim != null ? `    memory: ${k8sMem(w.mem_rec_lim)}` : null,
     `# пик за ${report.lookback_days} дн.: cpu ${cores(w.cpu_max)}, memory ${gib(w.mem_max)}; запас +${Math.round(report.request_buffer * 100)}%`,
   ].filter(Boolean).join("\n");

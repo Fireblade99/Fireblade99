@@ -21,6 +21,8 @@ def build_recommender(config: Config) -> Recommender:
         min_waste_cpu_cores=a.min_waste_cpu_cores,
         min_waste_memory_mb=a.min_waste_memory_mb,
         cpu_under_tolerance=a.cpu_under_tolerance,
+        memory_min_headroom=a.memory_min_headroom,
+        limit_saturation_ratio=a.limit_saturation_ratio,
     )
 
 

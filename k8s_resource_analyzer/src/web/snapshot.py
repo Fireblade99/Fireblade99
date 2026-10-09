@@ -77,6 +77,8 @@ def build_snapshot(
             "status": _status(rec),
             "cpu_action": rec.cpu_action,
             "mem_action": rec.memory_action,
+            "cpu_flag": rec.cpu_flag,
+            "mem_flag": rec.memory_flag,
             "notes": rec.reasons,
         })
         for run in g.runs:

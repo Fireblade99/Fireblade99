@@ -214,12 +214,13 @@ def test_base_name(pod, base):
     assert extract_base_name(pod) == base
 
 
-def _group(cpu_req, cpu_max, mem_req, mem_max, oom=False):
+def _group(cpu_req, cpu_max, mem_req, mem_max, oom=False, cpu_lim=None, mem_lim=None):
     from src.core.grouper import WorkloadGroup
     from src.core.runs import PodRun
 
     g = WorkloadGroup(namespace=NS, base_name="w", container="base")
     g.cpu_request, g.max_cpu_usage, g.memory_request, g.max_memory_usage = cpu_req, cpu_max, mem_req, mem_max
+    g.cpu_limit, g.memory_limit = cpu_lim, mem_lim
     g.runs = [PodRun(NS, "w-abcdefgh", "base", "w", 0, 3600, oom_killed=oom)]
     return g
 
@@ -234,4 +235,20 @@ def _group(cpu_req, cpu_max, mem_req, mem_max, oom=False):
 def test_actions_per_resource(cpu_req, cpu_max, mem_req, mem_max, oom, cpu_act, mem_act, risky):
     rec = Recommender().recommend(_group(cpu_req, cpu_max, mem_req, mem_max, oom))
     assert (rec.cpu_action, rec.memory_action, rec.is_risky) == (cpu_act, mem_act, risky)
+
+
+@pytest.mark.parametrize("kw,cpu,mem", [
+    # The reported case: memory peak 399.8 of 400Gi, CPU 1.02 with limit 1 → both "up"
+    (dict(cpu_req=1.0, cpu_max=1.02, mem_req=400 * GI, mem_max=399.8 * GI, cpu_lim=1.0, mem_lim=400 * GI),
+     ("up", "at_limit"), ("up", "at_limit")),
+    # No limits: memory at 95% of request has no headroom; CPU within tolerance stays ok
+    (dict(cpu_req=1.0, cpu_max=1.02, mem_req=100 * GI, mem_max=95 * GI), ("ok", ""), ("up", "near_request")),
+    # Comfortable headroom
+    (dict(cpu_req=2.0, cpu_max=1.5, mem_req=100 * GI, mem_max=70 * GI, cpu_lim=4.0, mem_lim=200 * GI),
+     ("ok", ""), ("ok", "")),
+])
+def test_saturation_flags(kw, cpu, mem):
+    rec = Recommender().recommend(_group(**kw))
+    assert (rec.cpu_action, rec.cpu_flag) == cpu
+    assert (rec.memory_action, rec.memory_flag) == mem
 

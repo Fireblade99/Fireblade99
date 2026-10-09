@@ -43,6 +43,10 @@ class AnalysisConfig:
     min_waste_memory_mb: float = 100.0
     # CPU is compressible: a peak up to this much above the request is not a shortage
     cpu_under_tolerance: float = 0.20
+    # Memory peak within 10% of the request = no headroom, flagged as "needs more"
+    memory_min_headroom: float = 0.10
+    # Peak at 95% of the limit = capped by the limit (OOM for memory, throttling for CPU)
+    limit_saturation_ratio: float = 0.95
     # kube-state-metrics label names of the Airflow pod labels
     # (empty values are fine: the columns stay blank)
     airflow_labels: Dict[str, str] = field(
