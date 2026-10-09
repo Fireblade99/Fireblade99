@@ -211,21 +211,39 @@ class ResourceAnalyzer:
         logger.info("Airflow labels found for %d pods", len(by_pod))
 
     def _attach_oom(self, runs: Dict[SeriesKey, PodRun]) -> None:
+        """
+        A run is OOM-killed if any of these saw it:
+        * terminated_reason      – the container ended with OOMKilled and was not
+                                   restarted (Airflow task pods, Jobs);
+        * last_terminated_reason – it was OOM-killed and restarted (Deployments);
+        * cAdvisor OOM counter   – the kernel OOM-killed a process in the container.
+        The memory peak of such runs is underestimated: the spike to the limit
+        happens between scrapes.
+        """
         start, end = self._window()
         ns = ns_selector(self.cfg.analysis.namespaces or None)
-        query = (
-            "max by (namespace, pod, container) (max_over_time("
-            f'kube_pod_container_status_last_terminated_reason{{reason="OOMKilled"{ns}}}[$window]))'
-        )
-        try:
-            result = self._prom.instant_max(query, start, end)
-        except Exception as exc:
-            logger.warning("OOMKilled query failed: %s", exc)
-            return
-        for labels, val in result.values():
-            run = runs.get(_series_key(labels))
-            if run is not None and val > 0:
-                run.oom_killed = True
+        by = "max by (namespace, pod, container)"
+        queries = {
+            "terminated": f'{by} (max_over_time(kube_pod_container_status_terminated_reason'
+                          f'{{reason="OOMKilled"{ns}}}[$window]))',
+            "last_terminated": f'{by} (max_over_time(kube_pod_container_status_last_terminated_reason'
+                               f'{{reason="OOMKilled"{ns}}}[$window]))',
+            "oom_events": f'{by} (increase(container_oom_events_total{{container!=""{ns}}}[$window]))',
+        }
+        found = 0
+        for name, query in queries.items():
+            try:
+                result = self._prom.instant_max(query, start, end)
+            except Exception as exc:
+                logger.warning("OOM query %s failed: %s", name, exc)
+                continue
+            for labels, val in result.values():
+                run = runs.get(_series_key(labels))
+                if run is not None and val > 0 and not run.oom_killed:
+                    run.oom_killed = True
+                    found += 1
+        if found:
+            logger.info("OOMKilled runs: %d", found)
 
     # ------------------------------------------------------------------
 

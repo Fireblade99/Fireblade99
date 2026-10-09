@@ -219,6 +219,18 @@ class Recommender:
             rec.is_risky = True
             rec.memory_action = "up"
             rec.memory_flag = "oom"
+            # The measured peak misses the spike that hit the limit: never suggest
+            # less than what was already too little, and drop "wasted" verdicts
+            base = group.memory_limit or group.memory_request
+            if base:
+                rec.recommended_memory_request = max(
+                    rec.recommended_memory_request or 0.0, base * (1 + self._mem_req_buf)
+                )
+                rec.recommended_memory_limit = max(
+                    rec.recommended_memory_limit or 0.0, base * (1 + self._mem_lim_buf)
+                )
+            reasons = [r for r in reasons if not r.startswith("Memory request is")]
+            rec.memory_waste_bytes = rec.memory_waste_ratio = None
             reasons.append(
                 f"OOMKilled in {group.oom_runs} of {len(group.runs)} runs "
                 f"(memory limit {_fmt_bytes(group.memory_limit)})"

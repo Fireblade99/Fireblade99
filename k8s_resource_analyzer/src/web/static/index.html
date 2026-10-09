@@ -378,7 +378,7 @@ const actionRank = (w) => (w.mem_action === "up" || w.cpu_action === "up" ? 2 : 
 
 function notesFor(w) {
   const thr = report.waste_threshold, out = [];
-  if (w.oom_runs) out.push(["crit", `OOMKilled в ${w.oom_runs} из ${w.runs} запусков — контейнер упёрся в limit памяти (${gib(w.mem_lim)}), увеличьте limit`]);
+  if (w.oom_runs) out.push(["crit", `OOMKilled в ${w.oom_runs} из ${w.runs} запусков — контейнер упёрся в limit памяти (${gib(w.mem_lim)}). Пик в метриках занижен: всплеск до limit происходит между замерами. Не сокращайте память, увеличьте limit`]);
   const tol = Math.round((report.cpu_tolerance ?? 0.2) * 100);
   if (w.mem_flag === "over_request")
     out.push(["crit", `Память: пик ${gib(w.mem_max)} выше request ${gib(w.mem_req)} — под могут вытеснить или убить по OOM, увеличьте request`]);

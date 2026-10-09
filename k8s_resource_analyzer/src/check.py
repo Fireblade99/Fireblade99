@@ -28,7 +28,9 @@ def run_check(config: Config) -> int:
         ("KSM requests", f'kube_pod_container_resource_requests{{container!=""{ns}}}'),
         ("KSM limits", f'kube_pod_container_resource_limits{{container!=""{ns}}}'),
         ("KSM pod labels", f'kube_pod_labels{{pod!=""{ns}}}'),
-        ("KSM OOMKilled", f'kube_pod_container_status_last_terminated_reason{{reason="OOMKilled"{ns}}}'),
+        ("OOM (terminated)", f'kube_pod_container_status_terminated_reason{{reason="OOMKilled"{ns}}}'),
+        ("OOM (restarted)", f'kube_pod_container_status_last_terminated_reason{{reason="OOMKilled"{ns}}}'),
+        ("OOM (cAdvisor)", f'container_oom_events_total{{container!=""{ns}}}'),
     ]
     print(f"Backend   : {mask_url(p.url)}")
     print(f"Namespaces: {', '.join(config.analysis.namespaces) or 'all'}")

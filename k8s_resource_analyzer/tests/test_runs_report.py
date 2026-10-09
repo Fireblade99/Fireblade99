@@ -252,3 +252,21 @@ def test_saturation_flags(kw, cpu, mem):
     assert (rec.cpu_action, rec.cpu_flag) == cpu
     assert (rec.memory_action, rec.memory_flag) == mem
 
+
+def test_oom_never_suggests_less_memory():
+    # The reported case: 2Gi request/limit, measured peak 739Mi, but the pod was OOM-killed
+    rec = Recommender().recommend(_group(1.0, 0.889, 2 * GI, 0.72 * GI, oom=True, mem_lim=2 * GI))
+    assert (rec.memory_action, rec.memory_flag) == ("up", "oom")
+    assert rec.recommended_memory_request >= 2 * GI * 1.2
+    assert rec.recommended_memory_limit >= 2 * GI * 1.5
+    assert rec.memory_waste_ratio is None and not rec.is_wasteful
+    assert not any(r.startswith("Memory request is") for r in rec.reasons)
+
+
+def test_oom_sources(analysed):
+    vm, groups, _ = analysed
+    oom_queries = [d["query"] for e, d in vm.calls if e == "query" and ("OOMKilled" in d["query"] or "oom_events" in d["query"])]
+    assert any("status_terminated_reason" in q for q in oom_queries)
+    assert any("last_terminated_reason" in q for q in oom_queries)
+    assert any("container_oom_events_total" in q for q in oom_queries)
+
