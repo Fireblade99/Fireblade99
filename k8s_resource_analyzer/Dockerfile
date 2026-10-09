@@ -1,4 +1,7 @@
-FROM python:3.12-slim
+# Base image: override when Docker Hub is not reachable, e.g.
+#   docker compose build --build-arg BASE_IMAGE=nexus.example:5000/python:3.11-slim
+ARG BASE_IMAGE=python:3.12-slim
+FROM ${BASE_IMAGE}
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -6,8 +9,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     ANALYZER_CONFIG=/app/config.yaml
 
-# tzdata: report times in the Excel file follow the TZ variable
-RUN apt-get update && apt-get install -y --no-install-recommends tzdata ca-certificates \
+# tzdata: report times in the Excel file follow the TZ variable.
+# Optional: without access to Debian mirrors the build goes on (times stay in UTC).
+RUN (apt-get update && apt-get install -y --no-install-recommends tzdata \
+     || echo "WARNING: tzdata not installed, Excel times will be UTC") \
     && rm -rf /var/lib/apt/lists/*
 
 # Optional corporate root CA (certs/*.crt) for networks that re-sign HTTPS
@@ -20,7 +25,8 @@ WORKDIR /app
 COPY requirements.txt requirements-web.txt ./
 # Use an internal mirror if PyPI is not reachable: --build-arg PIP_INDEX_URL=https://nexus/.../simple
 ARG PIP_INDEX_URL
-RUN pip install -r requirements-web.txt
+RUN if [ -z "$PIP_INDEX_URL" ]; then unset PIP_INDEX_URL; fi; \
+    pip install -r requirements-web.txt
 
 COPY main.py web.py ./
 COPY src ./src
