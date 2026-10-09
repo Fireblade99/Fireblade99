@@ -62,7 +62,22 @@ def main() -> int:
 
     import uvicorn
 
-    uvicorn.run(create_app(config), host=args.host, port=args.port, log_level="info", access_log=False)
+    # HTTPS: mount a certificate and key and point these variables at them
+    certfile = os.environ.get("SSL_CERTFILE") or None
+    keyfile = os.environ.get("SSL_KEYFILE") or None
+    if bool(certfile) != bool(keyfile):
+        logger.error("Set both SSL_CERTFILE and SSL_KEYFILE (or neither)")
+        return 2
+    logger.info("Serving on %s://%s:%d", "https" if certfile else "http", args.host, args.port)
+    uvicorn.run(
+        create_app(config),
+        host=args.host,
+        port=args.port,
+        log_level="info",
+        access_log=False,
+        ssl_certfile=certfile,
+        ssl_keyfile=keyfile,
+    )
     return 0
 
 

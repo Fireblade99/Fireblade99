@@ -14,12 +14,16 @@ services:
       - "8080:8080"
     environment:
       TZ: "UTC"                 # set your time zone for times in the Excel file
+      # HTTPS (when browsers force https for the domain): put tls.crt/tls.key into ./tls
+      # SSL_CERTFILE: /tls/tls.crt
+      # SSL_KEYFILE: /tls/tls.key
       # WEB_USER: admin         # uncomment to enable basic auth
       # WEB_PASSWORD: change-me
       # Corporate proxy env vars are ignored for VictoriaMetrics (prometheus.use_proxy: false)
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - analyzer-data:/data
+      # - ./tls:/tls:ro
 
 volumes:
   analyzer-data:

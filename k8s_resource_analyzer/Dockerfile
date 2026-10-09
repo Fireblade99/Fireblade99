@@ -40,6 +40,6 @@ VOLUME ["/data"]
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=4)"
+    CMD python -c "import os, ssl, urllib.request; s = 'https' if os.environ.get('SSL_CERTFILE') else 'http'; urllib.request.urlopen(s + '://127.0.0.1:8080/healthz', timeout=4, context=ssl._create_unverified_context())"
 
 CMD ["python", "web.py", "--data-dir", "/data"]
