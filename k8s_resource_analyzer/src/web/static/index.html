@@ -286,9 +286,10 @@ td.notes { max-width: 380px; overflow: hidden; text-overflow: ellipsis; text-ali
       <div class="toolbar">
         <label class="search"><svg><use href="#i-search"/></svg><input type="search" id="wl-q" placeholder="Поиск по задаче, DAG…"></label>
         <div class="seg" id="wl-seg">
-          <button data-f="issues" class="active">Проблемные</button>
-          <button data-f="over">Перерасход</button>
-          <button data-f="under">Нехватка / OOM</button>
+          <button data-f="issues" class="active" title="Есть что сократить или добавить">Проблемные</button>
+          <button data-f="over" title="Request можно сократить">Сократить</button>
+          <button data-f="under" title="Пик выше request — ресурсов не хватает">Добавить</button>
+          <button data-f="oom" title="Были запуски, убитые по OOM">OOM</button>
           <button data-f="all">Все</button>
         </div>
         <span class="spacer"></span>
@@ -351,20 +352,24 @@ const badge = (s) => { const b = STATUS[s] || ["", "i-info", s]; return `<span c
 // Per-resource verdict: what to do with each request
 const upPct = (max, req) => max != null && req ? Math.round((max / req - 1) * 100) : null;
 function actions(w) {
-  const out = [];
-  if (w.mem_action === "down") out.push(`<span class="badge b-over" title="Память можно сократить">${icon("i-down-arrow")}Память ${pct(w.mem_waste_pct)}</span>`);
-  if (w.mem_action === "up") out.push(`<span class="badge b-under" title="Памяти не хватает">${icon("i-warn")}Память${w.oom_runs ? " · OOM" : ` +${upPct(w.mem_max, w.mem_req)}%`}</span>`);
-  if (w.cpu_action === "down") out.push(`<span class="badge b-over" title="CPU можно сократить">${icon("i-down-arrow")}CPU ${pct(w.cpu_waste_pct)}</span>`);
-  if (w.cpu_action === "up") out.push(`<span class="badge b-under" title="CPU не хватает">${icon("i-warn")}CPU +${upPct(w.cpu_max, w.cpu_req)}%</span>`);
+  // Shortage first: it is the urgent one
+  const up = [], down = [];
+  const memUp = upPct(w.mem_max, w.mem_req);
+  if (w.mem_action === "up") up.push(`<span class="badge b-under" title="Пик памяти выше request или были OOM — увеличьте request/limit">${icon("i-warn")}Добавить память${memUp > 0 ? ` +${memUp}%` : ""}</span>`);
+  if (w.cpu_action === "up") up.push(`<span class="badge b-under" title="Пик CPU выше request больше допуска — увеличьте request">${icon("i-warn")}Добавить CPU +${upPct(w.cpu_max, w.cpu_req)}%</span>`);
+  if (w.mem_action === "down") down.push(`<span class="badge b-over" title="${pct(w.mem_waste_pct)} запрошенной памяти не используется даже на пике">${icon("i-down-arrow")}Сократить память ${pct(w.mem_waste_pct)}</span>`);
+  if (w.cpu_action === "down") down.push(`<span class="badge b-over" title="${pct(w.cpu_waste_pct)} запрошенного CPU не используется даже на пике">${icon("i-down-arrow")}Сократить CPU ${pct(w.cpu_waste_pct)}</span>`);
+  const out = up.concat(down);
   return out.length ? out.join(" ") : badge("ok");
 }
-const actionText = (w) => [w.mem_action === "down" ? "память ↓" : w.mem_action === "up" ? "память ↑" : "",
-  w.cpu_action === "down" ? "CPU ↓" : w.cpu_action === "up" ? "CPU ↑" : ""].filter(Boolean).join(", ") || "норма";
+const oomCell = (w) => w.oom_runs ? `<span class="chip c80" title="Запусков, убитых по OOM">${w.oom_runs} из ${w.runs}</span>` : "";
+const actionText = (w) => [w.mem_action === "up" ? "добавить память" : "", w.cpu_action === "up" ? "добавить CPU" : "",
+  w.mem_action === "down" ? "сократить память" : "", w.cpu_action === "down" ? "сократить CPU" : ""].filter(Boolean).join(", ") || "норма";
 const actionRank = (w) => (w.mem_action === "up" || w.cpu_action === "up" ? 2 : 0) + (w.mem_action === "down" || w.cpu_action === "down" ? 1 : 0);
 
 function notesFor(w) {
   const thr = report.waste_threshold, out = [];
-  if (w.oom_runs) out.push(["crit", `OOMKilled в ${w.oom_runs} из ${w.runs} запусков — памяти не хватает`]);
+  if (w.oom_runs) out.push(["crit", `OOMKilled в ${w.oom_runs} из ${w.runs} запусков — контейнер упёрся в limit памяти (${gib(w.mem_lim)}), увеличьте limit`]);
   const tol = Math.round((report.cpu_tolerance ?? 0.2) * 100);
   if (w.mem_action === "up" && w.mem_max > w.mem_req)
     out.push(["crit", `Память: пик ${gib(w.mem_max)} выше request ${gib(w.mem_req)} — под могут вытеснить или убить по OOM, увеличьте request`]);
@@ -398,6 +403,7 @@ const WL_COLS = [
   W("dag_id", "DAG", (r) => esc(r.dag_id), {l: 1, label: 1}),
   W("task_id", "Task", (r) => esc(r.task_id), {l: 1, label: 1}),
   W("status", "Что сделать", (r) => actions(r), {l: 1, csv: (r) => actionText(r)}),
+  W("oom_runs", "OOM", (r) => oomCell(r), {csv: (r) => r.oom_runs || ""}),
   W("runs", "Запусков", (r) => r.runs),
   W("runtime_h", "Время", (r) => hours(r.runtime_h), {csv: (r) => r.runtime_h}),
   W("mem_idle_gh", "Простой памяти, GiB·ч", (r) => fmt(r.mem_idle_gh, 0), {csv: (r) => r.mem_idle_gh}),
@@ -410,7 +416,6 @@ const WL_COLS = [
   W("cpu_rec", "CPU рекоменд.", (r) => `<b>${cores(r.cpu_rec)}</b>`, {csv: (r) => r.cpu_rec}),
   W("cpu_waste_pct", "CPU не исп.", (r) => r.cpu_waste_pct == null ? "" : `<span class="chip ${sevCls(r.cpu_waste_pct)}">${pct(r.cpu_waste_pct)}</span>`, {csv: (r) => r.cpu_waste_pct}),
   W("cpu_idle_ch", "Простой CPU, core·ч", (r) => fmt(r.cpu_idle_ch, 0), {csv: (r) => r.cpu_idle_ch}),
-  W("oom_runs", "OOM", (r) => r.oom_runs ? `<span class="chip c80">${r.oom_runs}</span>` : ""),
   W("notes", "Заметки", (r) => esc(notesFor(r).map((n) => n[1]).join(" · ")), {l: 1, cls: "notes", csv: (r) => notesFor(r).map((n) => n[1]).join("; ")}),
 ];
 const RUN_COLS = [
@@ -474,7 +479,8 @@ function filteredWorkloads() {
   const rows = report.workloads.filter((w) =>
     (s.f === "all" || (s.f === "issues" && actionRank(w) > 0) ||
      (s.f === "over" && (w.mem_action === "down" || w.cpu_action === "down")) ||
-     (s.f === "under" && (w.mem_action === "up" || w.cpu_action === "up" || w.oom_runs))) &&
+     (s.f === "under" && (w.mem_action === "up" || w.cpu_action === "up")) ||
+     (s.f === "oom" && w.oom_runs > 0)) &&
     (!q || `${w.workload} ${w.dag_id} ${w.task_id} ${w.namespace} ${w.container}`.toLowerCase().includes(q)));
   return sortRows(rows, s.sort, s.asc, (r, k) => k === "status" ? actionRank(r) * 1000 + (r.mem_idle_gh || 0) / 1e6 : r[k]);
 }
@@ -614,9 +620,10 @@ function renderSummary() {
   const s = report.summary, share = (a, b) => b ? Math.round(a / b * 100) + "%" : "—";
   const kpi = (l, v, unit, sub, ic) => `<div class="card kpi"><div class="l">${ic ? `<svg class="ico" style="color:${ic[1]}"><use href="#${ic[0]}"/></svg>` : ""}${l}</div>
     <div class="v num">${v}${unit ? `<small>${unit}</small>` : ""}</div><div class="s">${sub}</div></div>`;
+  const kpiOom = report.workloads.filter((w) => w.oom_runs).length;
   $("#kpis").innerHTML =
     kpi("Можно сократить", s.over, `из ${s.workloads} задач`, `больше ${Math.round(report.waste_threshold * 100)}% request по памяти или CPU не используется`, ["i-down-arrow", "var(--serious)"]) +
-    kpi("Нужно больше ресурсов", s.under, "", `пик выше request или OOM · OOMKilled запусков: ${s.oom_runs}`, s.under || s.oom_runs ? ["i-warn", "var(--crit)"] : ["i-ok", "var(--good)"]) +
+    kpi("Нужно больше ресурсов", s.under, "", `пик выше request · задач с OOM: ${kpiOom} (${s.oom_runs} запусков)`, s.under || s.oom_runs ? ["i-warn", "var(--crit)"] : ["i-ok", "var(--good)"]) +
     kpi("Простой памяти", big(s.mem_idle_gh), "GiB·ч", `${share(s.mem_idle_gh, s.mem_req_gh)} зарезервированного не использовано`) +
     kpi("Запусков за период", big(s.runs), "", `${report.lookback_days} дн. · ${s.workloads} задач`);
   $("#ov-sub").textContent = `Сумма request × время работы всех ${big(s.runs)} запусков за ${report.lookback_days} дн.`;
