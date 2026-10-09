@@ -68,6 +68,16 @@ def main() -> int:
     if bool(certfile) != bool(keyfile):
         logger.error("Set both SSL_CERTFILE and SSL_KEYFILE (or neither)")
         return 2
+    for path in filter(None, (certfile, keyfile)):
+        if not os.path.isfile(path):
+            folder = os.path.dirname(path) or "."
+            found = sorted(os.listdir(folder)) if os.path.isdir(folder) else None
+            logger.error("TLS file %s not found; %s contains: %s", path, folder,
+                         found if found is not None else "(no such directory)")
+            return 2
+        if not os.access(path, os.R_OK):
+            logger.error("TLS file %s is not readable by uid %d (chmod 644 it on the host)", path, os.getuid())
+            return 2
     logger.info("Serving on %s://%s:%d", "https" if certfile else "http", args.host, args.port)
     uvicorn.run(
         create_app(config),
