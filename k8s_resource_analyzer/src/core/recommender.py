@@ -11,6 +11,7 @@ For each workload group the recommender:
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from ..utils import fmt_bytes as _fmt_bytes
 from .grouper import WorkloadGroup
 
 
@@ -160,6 +161,14 @@ class Recommender:
                         f"{fmt_bytes(group.max_memory_usage)} exceeds request "
                         f"{fmt_bytes(group.memory_request)} (OOM risk)"
                     )
+
+        # ── OOM kills (peak memory before the kill may be under the request) ──
+        if group.oom_runs:
+            rec.is_risky = True
+            reasons.append(
+                f"OOMKilled in {group.oom_runs} of {len(group.runs)} runs "
+                f"(memory limit {_fmt_bytes(group.memory_limit)})"
+            )
 
         rec.reasons = reasons
         # Mark as wasteful only for positive over-provisioning reasons

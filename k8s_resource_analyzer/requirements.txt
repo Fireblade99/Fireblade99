@@ -1,0 +1,6 @@
+requests>=2.25
+PyYAML>=5.4
+openpyxl>=3.0
+rich>=10.0
+# only needed when kubernetes.enabled is true (live pods from the K8s API)
+kubernetes>=12.0

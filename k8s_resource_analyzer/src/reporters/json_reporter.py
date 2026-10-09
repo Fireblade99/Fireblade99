@@ -24,8 +24,13 @@ def to_dict(rec: Recommendation) -> Dict[str, Any]:
         "namespace": g.namespace,
         "workload": g.base_name,
         "container": g.container,
+        "dag_id": g.dag_id,
+        "task_id": g.task_id,
         "pod_count": len(g.pod_names),
         "pod_names": sorted(g.pod_names),
+        "runs": len(g.runs),
+        "runtime_hours": _round(g.runtime_hours, 2),
+        "oom_runs": g.oom_runs,
         "status": (
             "risky+wasteful"
             if rec.is_risky and rec.is_wasteful
@@ -42,6 +47,11 @@ def to_dict(rec: Recommendation) -> Dict[str, Any]:
             "cpu_limit_cores": _round(g.cpu_limit),
             "memory_limit_bytes": g.memory_limit,
             "memory_limit_gib": _gi(g.memory_limit),
+        },
+        "observed_avg": {
+            "cpu_cores": _round(g.avg_cpu_usage),
+            "memory_bytes": _round(g.avg_memory_usage, 0),
+            "memory_gib": _gi(g.avg_memory_usage),
         },
         "observed_max": {
             "cpu_cores": _round(g.max_cpu_usage),
@@ -62,6 +72,12 @@ def to_dict(rec: Recommendation) -> Dict[str, Any]:
             "memory_bytes": _round(rec.memory_waste_bytes, 0),
             "memory_gib": _gi(rec.memory_waste_bytes),
             "memory_ratio": _round(rec.memory_waste_ratio, 3),
+        },
+        "resource_hours": {
+            "cpu_requested_core_hours": _round(g.cpu_requested_core_hours, 2),
+            "cpu_idle_core_hours": _round(g.cpu_idle_core_hours, 2),
+            "memory_requested_gib_hours": _round(g.mem_requested_gib_hours, 2),
+            "memory_idle_gib_hours": _round(g.mem_idle_gib_hours, 2),
         },
         "reasons": rec.reasons,
     }

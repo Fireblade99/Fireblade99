@@ -1,0 +1,53 @@
+# Copy to config.yaml and adjust. CLI flags override these values.
+
+prometheus:
+  # VictoriaMetrics (vmselect) Prometheus-compatible API
+  url: http://victoria-metrics-shortterm.k8s-msd-prod.de.bc/select/0/prometheus
+  lookback_days: 7
+  step: 5m            # usage resolution; peaks between steps are still caught
+  # Load control: the week is queried in 24h chunks one after another
+  chunk_hours: 24
+  pause_seconds: 1.0
+  timeout: 120
+  # false: ignore HTTP(S)_PROXY env vars (corporate proxy can't reach the cluster)
+  use_proxy: false
+
+kubernetes:
+  # false: no kubeconfig needed, requests/limits come from kube-state-metrics
+  enabled: false
+  in_cluster: false
+  kubeconfig: null
+
+analysis:
+  namespaces:
+    - mpa-airflow-6679
+  exclude_containers: []
+  cpu_request_buffer: 0.20      # recommended request = peak × 1.2
+  memory_request_buffer: 0.20
+  cpu_limit_buffer: 0.50
+  memory_limit_buffer: 0.50
+  waste_threshold_ratio: 0.50   # flag when > 50% of the request is unused
+  min_waste_cpu_cores: 0.10
+  min_waste_memory_mb: 100
+  # kube-state-metrics names of the Airflow pod labels (see `main.py --check`)
+  airflow_labels:
+    dag_id: label_dag_id
+    task_id: label_task_id
+    run_id: label_run_id
+    try_number: label_try_number
+
+output:
+  format: excel
+  show_only_waste: true
+  sort_by: memory_waste
+
+email:
+  enabled: false
+  smtp_host: smtp.example.com
+  smtp_port: 587
+  smtp_user: ""
+  smtp_password: ""   # use the SMTP_PASSWORD env var instead
+  use_tls: true
+  sender: ""
+  recipients: []
+  subject: ""

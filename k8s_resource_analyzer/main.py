@@ -13,13 +13,19 @@ Key features
 * Uses MAX over a configurable lookback window – not an average – so a
   workload that spiked once still gets caught.
 * Covers pods already deleted but still present in Prometheus history.
-* Outputs a rich colour table or JSON for easy integration with other tools.
+* Per-run view: every pod (Airflow task try, Job run) with its request vs
+  actual average/peak usage and reserved-but-idle resource-hours.
+* Gentle on the backend: the lookback window is queried in chunks
+  (default 24h) one after another, aggregated server-side.
+* Outputs a rich colour table, JSON or an Excel report.
 
 Usage
 -----
     python main.py --prometheus-url http://prometheus:9090
     python main.py --config config.yaml --namespace airflow --output json
     python main.py --all --sort-by namespace
+    python main.py -c config.yaml --check          # what metrics/labels exist
+    python main.py -c config.yaml --no-k8s -o excel
 """
 
 import argparse
@@ -120,6 +126,38 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to kubeconfig file (overrides KUBECONFIG env var)",
     )
     p.add_argument(
+        "--no-k8s",
+        action="store_true",
+        help="Do not call the Kubernetes API; take requests/limits from kube-state-metrics only",
+    )
+    p.add_argument(
+        "--step",
+        metavar="DUR",
+        help="Resolution of usage samples, e.g. 1m, 5m (default: 5m)",
+    )
+    p.add_argument(
+        "--chunk-hours",
+        type=int,
+        metavar="H",
+        help="Query the lookback window in chunks of H hours (default: 24)",
+    )
+    p.add_argument(
+        "--pause",
+        type=float,
+        metavar="SEC",
+        help="Pause between backend requests in seconds (default: 1)",
+    )
+    p.add_argument(
+        "--use-proxy",
+        action="store_true",
+        help="Honour HTTP(S)_PROXY env vars for Prometheus requests (ignored by default)",
+    )
+    p.add_argument(
+        "--check",
+        action="store_true",
+        help="Only check which metrics and Airflow labels the backend has, then exit",
+    )
+    p.add_argument(
         "--debug",
         action="store_true",
         help="Enable verbose debug logging",
@@ -166,6 +204,21 @@ def main() -> int:
         config.kubernetes.in_cluster = True
     if args.kubeconfig:
         config.kubernetes.kubeconfig = args.kubeconfig
+    if args.no_k8s:
+        config.kubernetes.enabled = False
+    if args.step:
+        config.prometheus.step = args.step
+    if args.chunk_hours is not None:
+        config.prometheus.chunk_hours = args.chunk_hours
+    if args.pause is not None:
+        config.prometheus.pause_seconds = args.pause
+    if args.use_proxy:
+        config.prometheus.use_proxy = True
+
+    if args.check:
+        from src.check import run_check
+
+        return run_check(config)
 
     # ── Analysis ──────────────────────────────────────────────────────
     try:

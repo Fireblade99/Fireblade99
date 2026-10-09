@@ -18,7 +18,10 @@ A suffix is considered *random* (heuristic) when it:
 
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from .runs import PodRun
 
 # ------------------------------------------------------------------
 # Compiled patterns – order matters: most specific first
@@ -113,6 +116,70 @@ class WorkloadGroup:
     max_cpu_usage: Optional[float] = None    # cores
     max_memory_usage: Optional[float] = None  # bytes
 
+    # Every run (pod) of this workload seen in the lookback window
+    runs: List["PodRun"] = field(default_factory=list)
+
     @property
     def key(self) -> Tuple[str, str, str]:
         return (self.namespace, self.base_name, self.container)
+
+    # ── Aggregates over runs ───────────────────────────────────────────
+
+    @property
+    def dag_id(self) -> str:
+        return next((r.dag_id for r in reversed(self.runs) if r.dag_id), "")
+
+    @property
+    def task_id(self) -> str:
+        return next((r.task_id for r in reversed(self.runs) if r.task_id), "")
+
+    @property
+    def runtime_hours(self) -> float:
+        return sum(r.duration_hours for r in self.runs)
+
+    @property
+    def avg_cpu_usage(self) -> Optional[float]:
+        """Average CPU over all runs, weighted by run duration."""
+        return _weighted(self.runs, "cpu_avg")
+
+    @property
+    def avg_memory_usage(self) -> Optional[float]:
+        """Average memory over all runs, weighted by run duration."""
+        return _weighted(self.runs, "mem_avg")
+
+    @property
+    def cpu_requested_core_hours(self) -> float:
+        return sum(r.cpu_requested_core_hours for r in self.runs)
+
+    @property
+    def cpu_idle_core_hours(self) -> float:
+        return sum(r.cpu_idle_core_hours for r in self.runs)
+
+    @property
+    def mem_requested_gib_hours(self) -> float:
+        return sum(r.mem_requested_gib_hours for r in self.runs)
+
+    @property
+    def mem_idle_gib_hours(self) -> float:
+        return sum(r.mem_idle_gib_hours for r in self.runs)
+
+    @property
+    def oom_runs(self) -> int:
+        return sum(1 for r in self.runs if r.oom_killed)
+
+    @property
+    def request_changed(self) -> bool:
+        """True when the developer changed requests during the window."""
+        cpu = {r.cpu_request for r in self.runs if r.cpu_request is not None}
+        mem = {r.mem_request for r in self.runs if r.mem_request is not None}
+        return len(cpu) > 1 or len(mem) > 1
+
+
+def _weighted(runs: List["PodRun"], attr: str) -> Optional[float]:
+    pairs = [(getattr(r, attr), r.duration_hours) for r in runs if getattr(r, attr) is not None]
+    if not pairs:
+        return None
+    total_w = sum(w for _, w in pairs)
+    if total_w <= 0:
+        return sum(v for v, _ in pairs) / len(pairs)
+    return sum(v * w for v, w in pairs) / total_w

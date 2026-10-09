@@ -3,8 +3,10 @@ Excel reporter – generates a formatted .xlsx report for business stakeholders.
 
 Sheets
 ------
-1. Summary   – total waste stats + top-10 wasteful workloads
-2. Report    – full recommendations table with colour-coded waste %
+1. Summary          – total waste stats, requested vs used resource-hours,
+                      top-10 wasteful workloads, top-10 idle reservations
+2. Recommendations  – one row per workload with colour-coded waste %
+3. Runs             – one row per run (pod) with request vs actual usage
 """
 
 import datetime
@@ -17,6 +19,7 @@ from openpyxl.styles import (
 from openpyxl.utils import get_column_letter
 
 from ..core.recommender import Recommendation
+from ..core.runs import GIB
 from ..utils import fmt_bytes, fmt_cores
 
 # ── Colour palette ─────────────────────────────────────────────────────────
@@ -77,7 +80,8 @@ def generate(
     lookback_days: int = 7,
 ) -> str:
     """Write the report to *output_path* and return the path."""
-    items = list(recommendations)
+    all_items = list(recommendations)
+    items = all_items
     if show_only_waste:
         items = [r for r in items if r.is_wasteful or r.is_risky]
     items.sort(
@@ -86,15 +90,21 @@ def generate(
     )
 
     wb = Workbook()
-    _sheet_summary(wb, items, lookback_days)
+    _sheet_summary(wb, items, lookback_days, all_items)
     _sheet_report(wb, items)
+    _sheet_runs(wb, items)
     wb.save(output_path)
     return output_path
 
 
 # ── Sheet 1: Summary ───────────────────────────────────────────────────────
 
-def _sheet_summary(wb: Workbook, items: List[Recommendation], lookback_days: int) -> None:
+def _sheet_summary(
+    wb: Workbook,
+    items: List[Recommendation],
+    lookback_days: int,
+    all_items: Optional[List[Recommendation]] = None,
+) -> None:
     ws = wb.active
     ws.title = "Summary"
     ws.sheet_view.showGridLines = False
@@ -106,6 +116,13 @@ def _sheet_summary(wb: Workbook, items: List[Recommendation], lookback_days: int
     risky    = [r for r in items if r.is_risky]
     total_mem = sum((r.memory_waste_bytes or 0) for r in wasteful if (r.memory_waste_bytes or 0) > 0)
     total_cpu = sum((r.cpu_waste_cores   or 0) for r in wasteful if (r.cpu_waste_cores   or 0) > 0)
+
+    # Resource-hours over every analysed run (not only the flagged ones)
+    runs = [run for r in (all_items if all_items is not None else items) for run in r.group.runs]
+    cpu_req_h = sum(x.cpu_requested_core_hours for x in runs)
+    cpu_idle_h = sum(x.cpu_idle_core_hours for x in runs)
+    mem_req_h = sum(x.mem_requested_gib_hours for x in runs)
+    mem_idle_h = sum(x.mem_idle_gib_hours for x in runs)
 
     def _hdr(row: int, text: str) -> None:
         c = ws.cell(row=row, column=1, value=text)
@@ -145,22 +162,29 @@ def _sheet_summary(wb: Workbook, items: List[Recommendation], lookback_days: int
     _row(7,  "Under-provisioned (risky)",  str(len(risky)),    bold_val=True)
     _row(8,  "Total wasted memory",        fmt_bytes(total_mem), bold_val=True)
     _row(9,  "Total wasted CPU",           f"{fmt_cores(total_cpu)} cores", bold_val=True)
+    _row(10, "Runs (pods) analysed",       str(len(runs)))
+    _row(11, "CPU requested × time",       f"{cpu_req_h:,.0f} core·h")
+    _row(12, "CPU reserved but idle",      f"{cpu_idle_h:,.0f} core·h ({_share(cpu_idle_h, cpu_req_h)})",
+         bold_val=True)
+    _row(13, "Memory requested × time",    f"{mem_req_h:,.0f} GiB·h")
+    _row(14, "Memory reserved but idle",   f"{mem_idle_h:,.0f} GiB·h ({_share(mem_idle_h, mem_req_h)})",
+         bold_val=True)
 
-    ws.row_dimensions[10].height = 8  # spacer
+    ws.row_dimensions[15].height = 8  # spacer
 
-    _hdr(11, "Top 10 — Highest Memory Waste")
+    _hdr(16, "Top 10 — Highest Memory Waste")
     top10_headers = ["Workload", "Namespace", "Container",
                      "Mem Request", "Mem Max", "Mem Waste", "Waste %", "Recommended Request"]
     col_widths = [42, 24, 20, 14, 14, 14, 10, 22]
     for i, h in enumerate(top10_headers, start=1):
-        c = ws.cell(row=12, column=i, value=h)
+        c = ws.cell(row=17, column=i, value=h)
         c.font = _font(bold=True, color="FFFFFFFF", size=10)
         c.fill = _fill(_SUMMARY_BG)
         c.border = _border()
         c.alignment = Alignment(horizontal="center")
         ws.column_dimensions[get_column_letter(i)].width = col_widths[i - 1]
 
-    for idx, rec in enumerate(items[:10], start=13):
+    for idx, rec in enumerate(items[:10], start=18):
         g = rec.group
         row_data = [
             g.base_name,
@@ -181,24 +205,69 @@ def _sheet_summary(wb: Workbook, items: List[Recommendation], lookback_days: int
             if col in (6, 7):
                 c.fill = fill
 
+    # Top 10 by reserved-but-idle memory over the window (frequency × duration × over-request)
+    start = 18 + min(len(items), 10) + 1
+    _hdr(start, f"Top 10 — Idle Memory Reservation over {lookback_days} days")
+    idle_headers = ["Workload", "DAG", "Runs", "Runtime, h",
+                    "Mem Request", "Mem Max", "Idle Mem GiB·h", "Idle CPU core·h"]
+    for i, h in enumerate(idle_headers, start=1):
+        c = ws.cell(row=start + 1, column=i, value=h)
+        c.font = _font(bold=True, color="FFFFFFFF", size=10)
+        c.fill = _fill(_SUMMARY_BG)
+        c.border = _border()
+        c.alignment = Alignment(horizontal="center")
+    by_idle = sorted(items, key=lambda r: r.group.mem_idle_gib_hours, reverse=True)[:10]
+    for idx, rec in enumerate(by_idle, start=start + 2):
+        g = rec.group
+        row_data = [
+            g.base_name,
+            g.dag_id,
+            len(g.runs),
+            round(g.runtime_hours, 1),
+            fmt_bytes(g.memory_request),
+            fmt_bytes(g.max_memory_usage),
+            round(g.mem_idle_gib_hours, 1),
+            round(g.cpu_idle_core_hours, 1),
+        ]
+        for col, val in enumerate(row_data, start=1):
+            c = ws.cell(row=idx, column=col, value=val)
+            c.font = _font(size=10)
+            c.border = _border()
+            c.alignment = Alignment(horizontal="left" if col <= 2 else "right")
+            if col == 7:
+                c.fill = _fill(_LIGHT_RED)
+
+
+def _share(part: float, whole: float) -> str:
+    return f"{part / whole:.0%}" if whole else "-"
+
 
 # ── Sheet 2: Full report ───────────────────────────────────────────────────
 
 _REPORT_HEADERS = [
-    "Namespace", "Workload", "Container", "Pods",
-    "CPU Request", "CPU Max", "CPU Rec",
-    "Mem Request", "Mem Max", "Mem Rec",
+    "Namespace", "Workload", "DAG", "Task", "Container", "Runs",
+    "CPU Request", "CPU Avg", "CPU Max", "CPU Rec",
+    "Mem Request", "Mem Avg", "Mem Max", "Mem Rec",
     "CPU Waste", "CPU Waste %",
     "Mem Waste", "Mem Waste %",
+    "Idle CPU core·h", "Idle Mem GiB·h", "OOM runs",
     "Status", "Notes",
 ]
-_REPORT_WIDTHS = [24, 48, 20, 7, 12, 12, 12, 14, 14, 14, 12, 12, 14, 12, 14, 50]
+_REPORT_WIDTHS = [24, 48, 28, 28, 14, 7, 12, 12, 12, 12, 14, 14, 14, 14, 12, 12, 14, 12, 12, 13, 9, 14, 50]
+# 1-based columns that get special treatment
+_C_CPU_WASTE = (15, 16)
+_C_MEM_WASTE = (17, 18)
+_C_IDLE_MEM = 20
+_C_OOM = 21
+_C_LEFT = (1, 2, 3, 4, 5, 22, 23)
+_C_NOTES = 23
 
 
 def _sheet_report(wb: Workbook, items: List[Recommendation]) -> None:
     ws = wb.create_sheet(title="Recommendations")
     ws.sheet_view.showGridLines = False
-    ws.freeze_panes = "A2"
+    ws.freeze_panes = "C2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(_REPORT_HEADERS))}{max(1, len(items) + 1)}"
 
     for i, (h, w) in enumerate(zip(_REPORT_HEADERS, _REPORT_WIDTHS), start=1):
         c = ws.cell(row=1, column=i, value=h)
@@ -226,18 +295,25 @@ def _sheet_report(wb: Workbook, items: List[Recommendation]) -> None:
         row_data = [
             g.namespace,
             g.base_name,
+            g.dag_id,
+            g.task_id,
             g.container,
-            len(g.pod_names),
+            len(g.runs) or len(g.pod_names),
             fmt_cores(g.cpu_request),
+            fmt_cores(g.avg_cpu_usage),
             fmt_cores(g.max_cpu_usage),
             fmt_cores(rec.recommended_cpu_request),
             fmt_bytes(g.memory_request),
+            fmt_bytes(g.avg_memory_usage),
             fmt_bytes(g.max_memory_usage),
             fmt_bytes(rec.recommended_memory_request),
             fmt_cores(cpu_waste_val),
             f"{rec.cpu_waste_ratio:.0%}" if rec.cpu_waste_ratio and rec.cpu_waste_ratio > 0 else "-",
             fmt_bytes(mem_waste_val),
             _waste_label(rec.memory_waste_ratio) if (rec.memory_waste_bytes or 0) > 0 else "-",
+            round(g.cpu_idle_core_hours, 1),
+            round(g.mem_idle_gib_hours, 1),
+            g.oom_runs or "",
             status,
             " | ".join(rec.reasons),
         ]
@@ -251,16 +327,125 @@ def _sheet_report(wb: Workbook, items: List[Recommendation]) -> None:
             c.font = _font(size=10)
             c.border = _border()
             c.alignment = Alignment(
-                horizontal="left" if col in (1, 2, 3, 15, 16) else "right",
-                wrap_text=(col == 16),
+                horizontal="left" if col in _C_LEFT else "right",
+                wrap_text=(col == _C_NOTES),
             )
             # Apply colour
-            if col in (11, 12) and cpu_fill:
+            if col in _C_CPU_WASTE and cpu_fill:
                 c.fill = cpu_fill
-            elif col in (13, 14) and mem_fill:
+            elif col in _C_MEM_WASTE and mem_fill:
                 c.fill = mem_fill
-            elif risky_row and col not in (11, 12, 13, 14):
+            elif col == _C_OOM and g.oom_runs:
+                c.fill = _fill(_LIGHT_RED)
+            elif risky_row and col not in _C_CPU_WASTE + _C_MEM_WASTE:
                 c.fill = risky_row
 
         ws.row_dimensions[row_idx].height = 16
 
+
+# ── Sheet 3: Runs ──────────────────────────────────────────────────────────
+
+# Numbers stay numeric (cores / GiB / hours) so the sheet can be sorted and filtered
+_RUN_COLUMNS = [
+    # header, width, number format
+    ("Namespace", 22, None),
+    ("Workload", 44, None),
+    ("DAG", 28, None),
+    ("Task", 28, None),
+    ("Run ID", 30, None),
+    ("Try", 5, None),
+    ("Pod", 50, None),
+    ("Container", 12, None),
+    ("Start", 17, "yyyy-mm-dd hh:mm"),
+    ("End", 17, "yyyy-mm-dd hh:mm"),
+    ("Duration, h", 10, "0.00"),
+    ("CPU Request", 10, "0.000"),
+    ("CPU Limit", 10, "0.000"),
+    ("CPU Avg", 10, "0.000"),
+    ("CPU Max", 10, "0.000"),
+    ("CPU Over-request", 11, "0.000"),
+    ("CPU Over %", 9, "0%"),
+    ("Mem Request, GiB", 11, "0.00"),
+    ("Mem Limit, GiB", 11, "0.00"),
+    ("Mem Avg, GiB", 11, "0.00"),
+    ("Mem Max, GiB", 11, "0.00"),
+    ("Mem Over-request, GiB", 12, "0.00"),
+    ("Mem Over %", 9, "0%"),
+    ("Idle CPU core·h", 10, "0.00"),
+    ("Idle Mem GiB·h", 10, "0.00"),
+    ("OOMKilled", 10, None),
+]
+_RUN_C_CPU_OVER = (16, 17)
+_RUN_C_MEM_OVER = (22, 23)
+
+
+def _gib(b: Optional[float]) -> Optional[float]:
+    return None if b is None else b / GIB
+
+
+def _sheet_runs(wb: Workbook, items: List[Recommendation]) -> None:
+    ws = wb.create_sheet(title="Runs")
+    ws.sheet_view.showGridLines = False
+    ws.freeze_panes = "C2"
+
+    for i, (h, w, _) in enumerate(_RUN_COLUMNS, start=1):
+        c = ws.cell(row=1, column=i, value=h)
+        c.font = _font(bold=True, color="FFFFFFFF", size=10)
+        c.fill = _fill(_HEADER_BG)
+        c.border = _border()
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.row_dimensions[1].height = 30
+
+    row_idx = 1
+    for rec in items:
+        for run in sorted(rec.group.runs, key=lambda x: x.start, reverse=True):
+            row_idx += 1
+            row_data = [
+                run.namespace,
+                run.base_name,
+                run.dag_id,
+                run.task_id,
+                run.run_id,
+                run.try_number,
+                run.pod,
+                run.container,
+                run.started_at,
+                run.ended_at,
+                run.duration_hours,
+                run.cpu_request,
+                run.cpu_limit,
+                run.cpu_avg,
+                run.cpu_max,
+                run.cpu_over,
+                run.cpu_over_ratio,
+                _gib(run.mem_request),
+                _gib(run.mem_limit),
+                _gib(run.mem_avg),
+                _gib(run.mem_max),
+                _gib(run.mem_over),
+                run.mem_over_ratio,
+                run.cpu_idle_core_hours,
+                run.mem_idle_gib_hours,
+                "YES" if run.oom_killed else "",
+            ]
+            cpu_fill = _waste_fill(run.cpu_over_ratio)
+            mem_fill = _waste_fill(run.mem_over_ratio)
+            for col, val in enumerate(row_data, start=1):
+                c = ws.cell(row=row_idx, column=col, value=val)
+                c.font = _font(size=10)
+                c.border = _border()
+                fmt = _RUN_COLUMNS[col - 1][2]
+                if fmt:
+                    c.number_format = fmt
+                if col in _RUN_C_CPU_OVER and cpu_fill:
+                    c.fill = cpu_fill
+                elif col in _RUN_C_MEM_OVER and mem_fill:
+                    c.fill = mem_fill
+                elif col == len(_RUN_COLUMNS) and run.oom_killed:
+                    c.fill = _fill(_LIGHT_RED)
+                # Under-request (used more than asked) → risky colour
+                if col in (_RUN_C_CPU_OVER[0], _RUN_C_MEM_OVER[0]) and val is not None and val < 0:
+                    c.fill = _fill(_RISKY_BG)
+
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(_RUN_COLUMNS))}{max(1, row_idx)}"

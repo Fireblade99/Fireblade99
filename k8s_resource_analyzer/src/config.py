@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 import yaml
 import os
 
@@ -9,10 +9,18 @@ class PrometheusConfig:
     url: str = "http://prometheus:9090"
     lookback_days: int = 7
     step: str = "5m"
+    # Load control: the window is queried in chunks of this size, one by one
+    chunk_hours: int = 24
+    pause_seconds: float = 1.0
+    timeout: int = 120
+    # False: ignore HTTP(S)_PROXY env vars (they usually can't reach the cluster)
+    use_proxy: bool = False
 
 
 @dataclass
 class KubernetesConfig:
+    # False: take requests/limits only from kube-state-metrics (no kubeconfig needed)
+    enabled: bool = True
     in_cluster: bool = False
     kubeconfig: Optional[str] = None
 
@@ -31,6 +39,16 @@ class AnalysisConfig:
     waste_threshold_ratio: float = 0.50
     min_waste_cpu_cores: float = 0.10
     min_waste_memory_mb: float = 100.0
+    # kube-state-metrics label names of the Airflow pod labels
+    # (empty values are fine: the columns stay blank)
+    airflow_labels: Dict[str, str] = field(
+        default_factory=lambda: {
+            "dag_id": "label_dag_id",
+            "task_id": "label_task_id",
+            "run_id": "label_run_id",
+            "try_number": "label_try_number",
+        }
+    )
 
 
 @dataclass

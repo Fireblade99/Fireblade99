@@ -7,197 +7,163 @@ import requests
 logger = logging.getLogger(__name__)
 
 # Keyed by (namespace, pod_name, container_name)
-UsageMap = Dict[Tuple[str, str, str], float]
+SeriesKey = Tuple[str, str, str]
+UsageMap = Dict[SeriesKey, float]
+# (unix_ts, value) points of one series
+Points = List[Tuple[float, float]]
+SeriesMap = Dict[SeriesKey, Points]
+
+_BAD_VALUES = ("NaN", "+Inf", "-Inf")
 
 
 class PrometheusClient:
     """
     Thin wrapper around the Prometheus / VictoriaMetrics HTTP API.
 
-    Uses query_range + client-side max to avoid subquery syntax that some
-    backends (VictoriaMetrics, older Prometheus) reject with 422.
+    Gentle on the backend:
+    * the lookback window is split into chunks (``chunk_hours``, default 24h)
+      that are queried one after another with a pause in between, so a single
+      request never scans the whole week;
+    * series are aggregated server-side (``max by (namespace, pod, container)``)
+      so only one series per container comes back;
+    * no subqueries (some backends reject them with 422).
     """
 
-    def __init__(self, url: str, timeout: int = 120) -> None:
+    def __init__(
+        self,
+        url: str,
+        timeout: int = 120,
+        chunk_hours: int = 24,
+        pause_seconds: float = 1.0,
+        use_proxy: bool = False,
+        retries: int = 2,
+    ) -> None:
         self.url = url.rstrip("/")
         self._timeout = timeout
+        self._chunk = max(1, chunk_hours) * 3600
+        self._pause = pause_seconds
+        self._retries = retries
         self._session = requests.Session()
+        # Corporate HTTP(S)_PROXY usually cannot reach in-cluster hosts
+        self._session.trust_env = use_proxy
+        self.requests_made = 0
 
     # ------------------------------------------------------------------
     # Public helpers
     # ------------------------------------------------------------------
 
-    def test_connection(self) -> bool:
-        try:
-            resp = self._session.get(
-                f"{self.url}/-/ready", timeout=5, allow_redirects=True
+    def chunks(self, start: float, end: float) -> List[Tuple[float, float]]:
+        """Split [start, end] into consecutive windows of ``chunk_hours``."""
+        out = []
+        t = start
+        while t < end:
+            out.append((t, min(t + self._chunk, end)))
+            t += self._chunk
+        return out
+
+    def range_series(self, promql: str, start: float, end: float, step: int) -> SeriesMap:
+        """
+        Run ``query_range`` chunk by chunk and return every point per
+        (namespace, pod, container), sorted by time.
+        """
+        output: SeriesMap = {}
+        for c_start, c_end in self.chunks(start, end):
+            data = self._get(
+                "query_range",
+                {"query": promql, "start": int(c_start), "end": int(c_end), "step": step},
             )
-            return resp.status_code == 200
-        except Exception:
-            return False
+            for item in data:
+                key = _key(item["metric"])
+                if key is None:
+                    continue
+                pts = output.setdefault(key, [])
+                for ts, val in item.get("values", []):
+                    if val in _BAD_VALUES:
+                        continue
+                    pts.append((float(ts), float(val)))
+        for key, pts in output.items():
+            # Neighbouring chunks share their edge timestamp
+            output[key] = sorted(dict(pts).items())
+        logger.debug("Range query returned %d series", len(output))
+        return output
 
-    def get_max_cpu_usage(
-        self,
-        lookback_days: int = 7,
-        step: str = "1h",
-        namespaces: Optional[List[str]] = None,
-    ) -> UsageMap:
+    def instant_max(
+        self, promql_tpl: str, start: float, end: float
+    ) -> Dict[Tuple[Tuple[str, str], ...], Tuple[Dict[str, str], float]]:
         """
-        Return the **maximum** CPU usage (cores) per container observed
-        over *lookback_days*. Rate window matches step to keep data volume low.
-        """
-        ns_filter = _ns_selector(namespaces)
-        query = (
-            f'rate(container_cpu_usage_seconds_total'
-            f'{{container!="",container!="POD"{ns_filter}}}[{step}])'
-        )
-        return self._fetch_range_max(query, lookback_days, step)
+        Evaluate ``promql_tpl`` once per chunk at the chunk end, with ``$window``
+        replaced by the chunk length, and keep the max per label set.
 
-    def get_max_memory_usage(
-        self,
-        lookback_days: int = 7,
-        step: str = "1h",
-        namespaces: Optional[List[str]] = None,
-    ) -> UsageMap:
+        Returns {sorted label items: (labels, max value)}.
         """
-        Return the **maximum** memory working-set (bytes) per container
-        observed over *lookback_days*.
-        """
-        ns_filter = _ns_selector(namespaces)
-        query = (
-            f'container_memory_working_set_bytes'
-            f'{{container!="",container!="POD"{ns_filter}}}'
-        )
-        return self._fetch_range_max(query, lookback_days, step)
+        output: Dict[Tuple[Tuple[str, str], ...], Tuple[Dict[str, str], float]] = {}
+        for c_start, c_end in self.chunks(start, end):
+            window = f"{max(60, int(c_end - c_start))}s"
+            data = self._get("query", {"query": promql_tpl.replace("$window", window), "time": int(c_end)})
+            for item in data:
+                val = item.get("value", [None, "NaN"])[1]
+                if val in _BAD_VALUES:
+                    continue
+                labels = item["metric"]
+                k = tuple(sorted(labels.items()))
+                prev = output.get(k)
+                if prev is None or float(val) > prev[1]:
+                    output[k] = (labels, float(val))
+        return output
 
-    def get_pod_cpu_requests(
-        self,
-        lookback_days: int = 7,
-        step: str = "1h",
-        namespaces: Optional[List[str]] = None,
-    ) -> UsageMap:
-        """
-        Return CPU requests (cores) per pod/container from kube-state-metrics.
-        Covers historical pods that no longer exist in the K8s API.
-        """
-        ns_filter = _ns_selector(namespaces)
-        query = (
-            f'kube_pod_container_resource_requests'
-            f'{{resource="cpu",container!=""{ns_filter}}}'
-        )
-        return self._fetch_range_max(query, lookback_days, step)
-
-    def get_pod_memory_requests(
-        self,
-        lookback_days: int = 7,
-        step: str = "1h",
-        namespaces: Optional[List[str]] = None,
-    ) -> UsageMap:
-        """
-        Return memory requests (bytes) per pod/container from kube-state-metrics.
-        Covers historical pods that no longer exist in the K8s API.
-        """
-        ns_filter = _ns_selector(namespaces)
-        query = (
-            f'kube_pod_container_resource_requests'
-            f'{{resource="memory",container!=""{ns_filter}}}'
-        )
-        return self._fetch_range_max(query, lookback_days, step)
-
-    def get_pod_cpu_limits(
-        self,
-        lookback_days: int = 7,
-        step: str = "1h",
-        namespaces: Optional[List[str]] = None,
-    ) -> UsageMap:
-        """Return CPU limits (cores) per pod/container from kube-state-metrics."""
-        ns_filter = _ns_selector(namespaces)
-        query = (
-            f'kube_pod_container_resource_limits'
-            f'{{resource="cpu",container!=""{ns_filter}}}'
-        )
-        return self._fetch_range_max(query, lookback_days, step)
-
-    def get_pod_memory_limits(
-        self,
-        lookback_days: int = 7,
-        step: str = "1h",
-        namespaces: Optional[List[str]] = None,
-    ) -> UsageMap:
-        """Return memory limits (bytes) per pod/container from kube-state-metrics."""
-        ns_filter = _ns_selector(namespaces)
-        query = (
-            f'kube_pod_container_resource_limits'
-            f'{{resource="memory",container!=""{ns_filter}}}'
-        )
-        return self._fetch_range_max(query, lookback_days, step)
+    def instant(self, promql: str) -> List[dict]:
+        """Single instant query at "now" (used by --check)."""
+        return self._get("query", {"query": promql})
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
-    def _fetch_range_max(
-        self,
-        promql: str,
-        lookback_days: int,
-        step: str,
-    ) -> UsageMap:
-        """
-        Query the range API over [now-lookback, now] and return the per-series
-        maximum value, keyed by (namespace, pod, container).
-        """
-        end = int(time.time())
-        start = end - lookback_days * 86400
+    def _get(self, endpoint: str, params: dict) -> list:
+        if self.requests_made and self._pause > 0:
+            time.sleep(self._pause)
+        self.requests_made += 1
+        logger.debug("%s %s", endpoint, params)
 
-        step_seconds = _parse_step_seconds(step)
-        logger.debug(
-            "PromQL: %s  start=%s end=%s step=%ds", promql, start, end, step_seconds
-        )
-
-        resp = self._session.get(
-            f"{self.url}/api/v1/query_range",
-            params={
-                "query": promql,
-                "start": start,
-                "end": end,
-                "step": step_seconds,
-            },
-            timeout=self._timeout,
-        )
-        if not resp.ok:
-            raise RuntimeError(
-                f"{resp.status_code} {resp.reason} for query_range\n"
-                f"Query : {promql}\n"
-                f"Detail: {resp.text[:500]}"
-            )
-        payload = resp.json()
-        if payload.get("status") != "success":
-            raise RuntimeError(
-                f"Prometheus returned non-success: {payload.get('error', payload)}"
-            )
-
-        output: UsageMap = {}
-        for item in payload["data"]["result"]:
-            labels = item["metric"]
-            ns = labels.get("namespace", "")
-            pod = labels.get("pod", "")
-            container = labels.get("container", "")
-            if not pod or not container:
+        last_exc: Optional[Exception] = None
+        for attempt in range(self._retries + 1):
+            if attempt:
+                time.sleep(5 * attempt)
+                logger.warning("Retrying %s (attempt %d): %s", endpoint, attempt + 1, last_exc)
+            try:
+                resp = self._session.post(
+                    f"{self.url}/api/v1/{endpoint}", data=params, timeout=self._timeout
+                )
+            except requests.RequestException as exc:
+                last_exc = exc
                 continue
-            values = item.get("values", [])
-            if not values:
+            if resp.status_code >= 500 or resp.status_code == 429:
+                last_exc = RuntimeError(f"{resp.status_code} {resp.reason}: {resp.text[:300]}")
                 continue
-            max_val = max(
-                float(v[1]) for v in values if v[1] not in ("NaN", "+Inf", "-Inf")
-            )
-            key = (ns, pod, container)
-            output[key] = max(output.get(key, 0.0), max_val)
+            if not resp.ok:
+                raise RuntimeError(
+                    f"{resp.status_code} {resp.reason} for {endpoint}\n"
+                    f"Query : {params.get('query')}\n"
+                    f"Detail: {resp.text[:500]}"
+                )
+            payload = resp.json()
+            if payload.get("status") != "success":
+                raise RuntimeError(
+                    f"Prometheus returned non-success: {payload.get('error', payload)}"
+                )
+            return payload["data"]["result"]
+        raise RuntimeError(f"{endpoint} failed after {self._retries + 1} attempts: {last_exc}")
 
-        logger.debug("Range query returned %d series", len(output))
-        return output
+
+def _key(labels: Dict[str, str]) -> Optional[SeriesKey]:
+    pod = labels.get("pod", "")
+    container = labels.get("container", "")
+    if not pod or not container:
+        return None
+    return (labels.get("namespace", ""), pod, container)
 
 
-def _parse_step_seconds(step: str) -> int:
+def parse_step_seconds(step: str) -> int:
     """Convert a duration string like '5m', '1h', '30s' to seconds."""
     step = step.strip()
     if step.endswith("s"):
@@ -211,7 +177,7 @@ def _parse_step_seconds(step: str) -> int:
     return int(step)  # assume already seconds
 
 
-def _ns_selector(namespaces: Optional[List[str]]) -> str:
+def ns_selector(namespaces: Optional[List[str]]) -> str:
     """Build a PromQL label selector fragment for the given namespaces."""
     if not namespaces:
         return ""

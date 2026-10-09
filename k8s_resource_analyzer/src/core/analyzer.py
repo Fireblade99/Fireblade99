@@ -3,42 +3,95 @@ Main analysis orchestrator.
 
 Steps
 -----
-1. Fetch current pod resource requests/limits from the Kubernetes API.
-2. Fetch peak CPU and memory usage from Prometheus (covers historical pods too).
-3. Group everything by workload base-name (namespace + base_name + container).
-4. Return a list of ``WorkloadGroup`` objects ready for the recommender.
+1. (optional) Fetch current pod resource requests/limits from the Kubernetes API.
+2. Fetch CPU and memory usage of every pod (= run) from Prometheus /
+   VictoriaMetrics, chunk by chunk, and turn it into ``PodRun`` records.
+3. Attach requests/limits, Airflow labels and OOM kills from kube-state-metrics.
+4. Group runs by workload base-name (namespace + base_name + container).
 """
 
 import logging
-from collections import defaultdict
+import time
 from typing import Dict, List, Optional, Tuple
 
-from ..clients.k8s_client import K8sClient
-from ..clients.prom_client import PrometheusClient
+from ..clients.prom_client import PrometheusClient, SeriesKey, ns_selector, parse_step_seconds
 from ..config import Config
 from .grouper import WorkloadGroup, extract_base_name
+from .runs import PodRun, build_runs
 
 logger = logging.getLogger(__name__)
 
 GroupKey = Tuple[str, str, str]  # (namespace, base_name, container)
 
+_USAGE_SEL = 'container!="",container!="POD"'
+
 
 class ResourceAnalyzer:
     def __init__(self, config: Config) -> None:
         self.cfg = config
-        self._k8s = K8sClient(
-            in_cluster=config.kubernetes.in_cluster,
-            kubeconfig=config.kubernetes.kubeconfig,
+        self._k8s = None
+        if config.kubernetes.enabled:
+            from ..clients.k8s_client import K8sClient  # needs the kubernetes package
+
+            self._k8s = K8sClient(
+                in_cluster=config.kubernetes.in_cluster,
+                kubeconfig=config.kubernetes.kubeconfig,
+            )
+        p = config.prometheus
+        self._prom = PrometheusClient(
+            url=p.url,
+            timeout=p.timeout,
+            chunk_hours=p.chunk_hours,
+            pause_seconds=p.pause_seconds,
+            use_proxy=p.use_proxy,
         )
-        self._prom = PrometheusClient(url=config.prometheus.url)
 
     # ------------------------------------------------------------------
 
     def analyze(self) -> List[WorkloadGroup]:
         """Run full analysis and return grouped workloads with usage data."""
         cfg = self.cfg
+        groups: Dict[GroupKey, WorkloadGroup] = {}
 
-        # ── 1. Kubernetes data ─────────────────────────────────────────
+        # ── 1. Kubernetes data (live pods only) ────────────────────────
+        if self._k8s is not None:
+            self._load_k8s(groups)
+
+        # ── 2. Usage per run ───────────────────────────────────────────
+        runs = self._load_runs()
+
+        # ── 3. kube-state-metrics: requests/limits, labels, OOM ────────
+        self._attach_requests(runs)
+        self._attach_labels(runs)
+        self._attach_oom(runs)
+
+        # ── 4. Group runs by workload ──────────────────────────────────
+        for run in sorted(runs.values(), key=lambda r: r.start):
+            key: GroupKey = (run.namespace, run.base_name, run.container)
+            g = groups.get(key)
+            if g is None:
+                g = groups[key] = WorkloadGroup(
+                    namespace=run.namespace, base_name=run.base_name, container=run.container
+                )
+            g.runs.append(run)
+            if run.pod not in g.pod_names:
+                g.pod_names.append(run.pod)
+
+        for g in groups.values():
+            _fill_group(g)
+
+        logger.info(
+            "Prometheus: %d runs in %d workload groups (%d HTTP requests)",
+            len(runs), len(groups), self._prom.requests_made,
+        )
+        return list(groups.values())
+
+    # ------------------------------------------------------------------
+    # Steps
+    # ------------------------------------------------------------------
+
+    def _load_k8s(self, groups: Dict[GroupKey, WorkloadGroup]) -> None:
+        cfg = self.cfg
         logger.info("Fetching pod resources from Kubernetes …")
         pod_resources = self._k8s.get_pod_resources(
             namespaces=cfg.analysis.namespaces or None,
@@ -49,28 +102,20 @@ class ResourceAnalyzer:
             len(pod_resources),
             len({pr.pod_name for pr in pod_resources}),
         )
-
-        groups: Dict[GroupKey, WorkloadGroup] = {}
         excluded_containers = set(cfg.analysis.exclude_containers or [])
-
         for pr in pod_resources:
             if pr.container_name in excluded_containers:
                 continue
             base = extract_base_name(pr.pod_name)
             key: GroupKey = (pr.namespace, base, pr.container_name)
-
-            if key not in groups:
-                groups[key] = WorkloadGroup(
-                    namespace=pr.namespace,
-                    base_name=base,
-                    container=pr.container_name,
+            g = groups.get(key)
+            if g is None:
+                g = groups[key] = WorkloadGroup(
+                    namespace=pr.namespace, base_name=base, container=pr.container_name
                 )
-
-            g = groups[key]
             if pr.pod_name not in g.pod_names:
                 g.pod_names.append(pr.pod_name)
-
-            # Keep the latest non-None values (all replicas should be identical)
+            # Live values win over history: this is what the next run will request
             if pr.cpu_request is not None:
                 g.cpu_request = pr.cpu_request
             if pr.memory_request is not None:
@@ -80,128 +125,137 @@ class ResourceAnalyzer:
             if pr.memory_limit is not None:
                 g.memory_limit = pr.memory_limit
 
-        # ── 2. Prometheus data ─────────────────────────────────────────
+    def _window(self) -> Tuple[float, float]:
+        end = time.time()
+        return end - self.cfg.prometheus.lookback_days * 86400, end
+
+    def _load_runs(self) -> Dict[SeriesKey, PodRun]:
+        cfg = self.cfg
+        start, end = self._window()
+        step = cfg.prometheus.step
+        step_s = parse_step_seconds(step)
+        sel = _USAGE_SEL + ns_selector(cfg.analysis.namespaces or None)
+        by = "namespace, pod, container"
+
         logger.info(
-            "Fetching max CPU/memory from Prometheus (lookback=%dd) …",
-            cfg.prometheus.lookback_days,
-        )
-        prom_kwargs = dict(
-            lookback_days=cfg.prometheus.lookback_days,
-            step=cfg.prometheus.step,
-            namespaces=cfg.analysis.namespaces or None,
+            "Fetching CPU/memory per run from Prometheus (lookback=%dd, step=%s, chunk=%dh) …",
+            cfg.prometheus.lookback_days, step, cfg.prometheus.chunk_hours,
         )
         try:
-            prom_cpu = self._prom.get_max_cpu_usage(**prom_kwargs)
-            prom_mem = self._prom.get_max_memory_usage(**prom_kwargs)
+            # rate/max_over_time over one step: every raw sample is covered,
+            # so short spikes between steps are not lost
+            cpu = self._prom.range_series(
+                f"max by ({by}) (rate(container_cpu_usage_seconds_total{{{sel}}}[{step}]))",
+                start, end, step_s,
+            )
+            mem = self._prom.range_series(
+                f"max by ({by}) (max_over_time(container_memory_working_set_bytes{{{sel}}}[{step}]))",
+                start, end, step_s,
+            )
         except Exception as exc:
             raise RuntimeError(f"Prometheus query failed: {exc}") from exc
+        logger.info("Prometheus returned %d CPU series and %d memory series", len(cpu), len(mem))
 
-        logger.info(
-            "Prometheus returned %d CPU series and %d memory series",
-            len(prom_cpu),
-            len(prom_mem),
+        runs = build_runs(cpu, mem, step_s, extract_base_name)
+        return {k: r for k, r in runs.items() if self._wanted(*k)}
+
+    def _attach_requests(self, runs: Dict[SeriesKey, PodRun]) -> None:
+        logger.info("Fetching requests/limits from kube-state-metrics …")
+        start, end = self._window()
+        ns = ns_selector(self.cfg.analysis.namespaces or None)
+        for kind, cpu_attr, mem_attr in (
+            ("requests", "cpu_request", "mem_request"),
+            ("limits", "cpu_limit", "mem_limit"),
+        ):
+            query = (
+                f"max by (namespace, pod, container, resource) (max_over_time("
+                f'kube_pod_container_resource_{kind}{{resource=~"cpu|memory",container!=""{ns}}}[$window]))'
+            )
+            try:
+                result = self._prom.instant_max(query, start, end)
+            except Exception as exc:
+                logger.warning("kube-state-metrics %s query failed: %s", kind, exc)
+                continue
+            for labels, val in result.values():
+                run = runs.get(_series_key(labels))
+                if run is not None:
+                    setattr(run, cpu_attr if labels.get("resource") == "cpu" else mem_attr, val)
+        missing = sum(1 for r in runs.values() if r.cpu_request is None and r.mem_request is None)
+        if missing:
+            logger.info("%d runs have no requests in kube-state-metrics", missing)
+
+    def _attach_labels(self, runs: Dict[SeriesKey, PodRun]) -> None:
+        names = {k: v for k, v in (self.cfg.analysis.airflow_labels or {}).items() if v}
+        if not names or not runs:
+            return
+        start, end = self._window()
+        ns = ns_selector(self.cfg.analysis.namespaces or None)
+        query = (
+            f"max by (namespace, pod, {', '.join(names.values())}) "
+            f'(max_over_time(kube_pod_labels{{pod!=""{ns}}}[$window]))'
         )
-
-        # ── 2b. Requests/limits from kube-state-metrics ────────────────
-        # This covers historical pods no longer visible in the K8s API.
-        logger.info("Fetching historical requests/limits from kube-state-metrics …")
         try:
-            ksm_cpu_req = self._prom.get_pod_cpu_requests(**prom_kwargs)
-            ksm_mem_req = self._prom.get_pod_memory_requests(**prom_kwargs)
-            ksm_cpu_lim = self._prom.get_pod_cpu_limits(**prom_kwargs)
-            ksm_mem_lim = self._prom.get_pod_memory_limits(**prom_kwargs)
-            logger.info(
-                "kube-state-metrics returned %d CPU-request series", len(ksm_cpu_req)
-            )
+            result = self._prom.instant_max(query, start, end)
         except Exception as exc:
-            logger.warning(
-                "kube-state-metrics queries failed (no requests for historical pods): %s", exc
-            )
-            ksm_cpu_req = ksm_mem_req = ksm_cpu_lim = ksm_mem_lim = {}
+            logger.warning("kube_pod_labels query failed (no DAG/task columns): %s", exc)
+            return
+        by_pod: Dict[Tuple[str, str], Dict[str, str]] = {}
+        for labels, _ in result.values():
+            values = {attr: labels.get(lbl, "") for attr, lbl in names.items()}
+            if any(values.values()):
+                by_pod[(labels.get("namespace", ""), labels.get("pod", ""))] = values
+        for run in runs.values():
+            for attr, val in by_pod.get((run.namespace, run.pod), {}).items():
+                setattr(run, attr, val)
+        logger.info("Airflow labels found for %d pods", len(by_pod))
 
-        # ── 3. Aggregate Prometheus data per workload group ────────────
-        # Use defaultdict so we start at 0.0 and take the running max.
-        cpu_max_by_group: Dict[GroupKey, float] = defaultdict(float)
-        mem_max_by_group: Dict[GroupKey, float] = defaultdict(float)
+    def _attach_oom(self, runs: Dict[SeriesKey, PodRun]) -> None:
+        start, end = self._window()
+        ns = ns_selector(self.cfg.analysis.namespaces or None)
+        query = (
+            "max by (namespace, pod, container) (max_over_time("
+            f'kube_pod_container_status_last_terminated_reason{{reason="OOMKilled"{ns}}}[$window]))'
+        )
+        try:
+            result = self._prom.instant_max(query, start, end)
+        except Exception as exc:
+            logger.warning("OOMKilled query failed: %s", exc)
+            return
+        for labels, val in result.values():
+            run = runs.get(_series_key(labels))
+            if run is not None and val > 0:
+                run.oom_killed = True
 
-        # For requests from kube-state-metrics, value is constant per pod —
-        # store last-seen value per group (pod with max value wins, all equal).
-        ksm_cpu_req_by_group: Dict[GroupKey, float] = {}
-        ksm_mem_req_by_group: Dict[GroupKey, float] = {}
-        ksm_cpu_lim_by_group: Dict[GroupKey, float] = {}
-        ksm_mem_lim_by_group: Dict[GroupKey, float] = {}
+    # ------------------------------------------------------------------
 
-        excluded = set(cfg.analysis.exclude_namespaces or [])
-        allowed_ns = set(cfg.analysis.namespaces) if cfg.analysis.namespaces else None
+    def _wanted(self, ns: str, pod: str, container: str) -> bool:
+        a = self.cfg.analysis
+        if ns in set(a.exclude_namespaces or []):
+            return False
+        if a.namespaces and ns not in a.namespaces:
+            return False
+        return container not in set(a.exclude_containers or [])
 
-        excluded_containers = set(cfg.analysis.exclude_containers or [])
 
-        def _group_key(ns: str, pod: str, container: str) -> Optional[GroupKey]:
-            if ns in excluded:
-                return None
-            if allowed_ns and ns not in allowed_ns:
-                return None
-            if container in excluded_containers:
-                return None
-            return (ns, extract_base_name(pod), container)
+def _series_key(labels: Dict[str, str]) -> SeriesKey:
+    return (labels.get("namespace", ""), labels.get("pod", ""), labels.get("container", ""))
 
-        for (ns, pod, container), val in prom_cpu.items():
-            key = _group_key(ns, pod, container)
-            if key and val > cpu_max_by_group[key]:
-                cpu_max_by_group[key] = val
 
-        for (ns, pod, container), val in prom_mem.items():
-            key = _group_key(ns, pod, container)
-            if key and val > mem_max_by_group[key]:
-                mem_max_by_group[key] = val
+def _fill_group(g: WorkloadGroup) -> None:
+    """Peak usage over all runs; requests/limits from the latest run unless live K8s set them."""
+    cpu = [r.cpu_max for r in g.runs if r.cpu_max is not None]
+    mem = [r.mem_max for r in g.runs if r.mem_max is not None]
+    g.max_cpu_usage = max(cpu) if cpu else None
+    g.max_memory_usage = max(mem) if mem else None
 
-        for (ns, pod, container), val in ksm_cpu_req.items():
-            key = _group_key(ns, pod, container)
-            if key:
-                ksm_cpu_req_by_group[key] = max(ksm_cpu_req_by_group.get(key, 0.0), val)
+    def latest(attr: str) -> Optional[float]:
+        return next((getattr(r, attr) for r in reversed(g.runs) if getattr(r, attr) is not None), None)
 
-        for (ns, pod, container), val in ksm_mem_req.items():
-            key = _group_key(ns, pod, container)
-            if key:
-                ksm_mem_req_by_group[key] = max(ksm_mem_req_by_group.get(key, 0.0), val)
-
-        for (ns, pod, container), val in ksm_cpu_lim.items():
-            key = _group_key(ns, pod, container)
-            if key:
-                ksm_cpu_lim_by_group[key] = max(ksm_cpu_lim_by_group.get(key, 0.0), val)
-
-        for (ns, pod, container), val in ksm_mem_lim.items():
-            key = _group_key(ns, pod, container)
-            if key:
-                ksm_mem_lim_by_group[key] = max(ksm_mem_lim_by_group.get(key, 0.0), val)
-
-        # ── 4. Add groups seen in Prometheus but no longer in K8s ──────
-        # (Completed jobs / Airflow tasks that have already been deleted)
-        all_prom_keys = set(cpu_max_by_group) | set(mem_max_by_group)
-        for key in all_prom_keys:
-            if key not in groups:
-                ns, base, container = key
-                groups[key] = WorkloadGroup(
-                    namespace=ns,
-                    base_name=base,
-                    container=container,
-                )
-
-        # ── 5. Attach peak usage and fill missing requests/limits ──────
-        for key, group in groups.items():
-            if key in cpu_max_by_group:
-                group.max_cpu_usage = cpu_max_by_group[key]
-            if key in mem_max_by_group:
-                group.max_memory_usage = mem_max_by_group[key]
-            # Fill requests/limits from kube-state-metrics for historical pods
-            if group.cpu_request is None and key in ksm_cpu_req_by_group:
-                group.cpu_request = ksm_cpu_req_by_group[key]
-            if group.memory_request is None and key in ksm_mem_req_by_group:
-                group.memory_request = ksm_mem_req_by_group[key]
-            if group.cpu_limit is None and key in ksm_cpu_lim_by_group:
-                group.cpu_limit = ksm_cpu_lim_by_group[key]
-            if group.memory_limit is None and key in ksm_mem_lim_by_group:
-                group.memory_limit = ksm_mem_lim_by_group[key]
-
-        return list(groups.values())
-
+    if g.cpu_request is None:
+        g.cpu_request = latest("cpu_request")
+    if g.memory_request is None:
+        g.memory_request = latest("mem_request")
+    if g.cpu_limit is None:
+        g.cpu_limit = latest("cpu_limit")
+    if g.memory_limit is None:
+        g.memory_limit = latest("mem_limit")
