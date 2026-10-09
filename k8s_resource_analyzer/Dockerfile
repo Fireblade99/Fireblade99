@@ -23,10 +23,13 @@ ENV PIP_CERT=/etc/ssl/certs/ca-certificates.crt \
 
 WORKDIR /app
 COPY requirements.txt requirements-web.txt ./
-# Use an internal mirror if PyPI is not reachable: --build-arg PIP_INDEX_URL=https://nexus/.../simple
+# Internal mirror if PyPI is not reachable (see .env):
+#   PIP_INDEX_URL=https://nexus/.../simple  PIP_TRUSTED_HOST=nexus
 ARG PIP_INDEX_URL
+ARG PIP_TRUSTED_HOST
 RUN if [ -z "$PIP_INDEX_URL" ]; then unset PIP_INDEX_URL; fi; \
-    pip install -r requirements-web.txt
+    if [ -z "$PIP_TRUSTED_HOST" ]; then unset PIP_TRUSTED_HOST; fi; \
+    pip install --timeout 120 -r requirements-web.txt
 
 COPY main.py web.py ./
 COPY src ./src
