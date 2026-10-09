@@ -4,3 +4,5 @@ venv/
 .venv/
 data/
 certs/*.crt
+certs/*.key
+tls/

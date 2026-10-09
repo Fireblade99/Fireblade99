@@ -20,6 +20,7 @@ def build_recommender(config: Config) -> Recommender:
         waste_threshold_ratio=a.waste_threshold_ratio,
         min_waste_cpu_cores=a.min_waste_cpu_cores,
         min_waste_memory_mb=a.min_waste_memory_mb,
+        cpu_under_tolerance=a.cpu_under_tolerance,
     )
 
 

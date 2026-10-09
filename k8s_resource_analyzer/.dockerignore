@@ -5,3 +5,6 @@ tests/
 **/__pycache__/
 *.xlsx
 config.yaml
+certs/*.key
+certs/*.pem
+tls/

@@ -158,7 +158,10 @@ td.notes { max-width: 380px; overflow: hidden; text-overflow: ellipsis; text-ali
 .res .k { color: var(--text-2); font-size: 12px; }
 .res .now { display: flex; align-items: baseline; gap: 8px; margin-top: 4px; font-size: 20px; font-weight: 650; }
 .res .now .arrow { color: var(--muted); font-weight: 400; font-size: 16px; }
-.res .now .rec { color: var(--good-ink); }
+.res .now .rec { color: var(--text-2); }
+.res .now .rec.down { color: var(--good-ink); }
+.res .now .rec.up { color: var(--crit-ink); }
+.res .need { color: var(--crit-ink); font-weight: 600; }
 .res .s { color: var(--text-2); font-size: 12.5px; margin-top: 4px; }
 .res .save { color: var(--good-ink); font-weight: 600; }
 .yaml { position: relative; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
@@ -345,18 +348,34 @@ const STATUS = {
   "ok": ["b-ok", "i-ok", "Норма"],
 };
 const badge = (s) => { const b = STATUS[s] || ["", "i-info", s]; return `<span class="badge ${b[0]}">${icon(b[1])}${b[2]}</span>`; };
+// Per-resource verdict: what to do with each request
+const upPct = (max, req) => max != null && req ? Math.round((max / req - 1) * 100) : null;
+function actions(w) {
+  const out = [];
+  if (w.mem_action === "down") out.push(`<span class="badge b-over" title="Память можно сократить">${icon("i-down-arrow")}Память ${pct(w.mem_waste_pct)}</span>`);
+  if (w.mem_action === "up") out.push(`<span class="badge b-under" title="Памяти не хватает">${icon("i-warn")}Память${w.oom_runs ? " · OOM" : ` +${upPct(w.mem_max, w.mem_req)}%`}</span>`);
+  if (w.cpu_action === "down") out.push(`<span class="badge b-over" title="CPU можно сократить">${icon("i-down-arrow")}CPU ${pct(w.cpu_waste_pct)}</span>`);
+  if (w.cpu_action === "up") out.push(`<span class="badge b-under" title="CPU не хватает">${icon("i-warn")}CPU +${upPct(w.cpu_max, w.cpu_req)}%</span>`);
+  return out.length ? out.join(" ") : badge("ok");
+}
+const actionText = (w) => [w.mem_action === "down" ? "память ↓" : w.mem_action === "up" ? "память ↑" : "",
+  w.cpu_action === "down" ? "CPU ↓" : w.cpu_action === "up" ? "CPU ↑" : ""].filter(Boolean).join(", ") || "норма";
+const actionRank = (w) => (w.mem_action === "up" || w.cpu_action === "up" ? 2 : 0) + (w.mem_action === "down" || w.cpu_action === "down" ? 1 : 0);
 
 function notesFor(w) {
   const thr = report.waste_threshold, out = [];
   if (w.oom_runs) out.push(["crit", `OOMKilled в ${w.oom_runs} из ${w.runs} запусков — памяти не хватает`]);
-  if (w.mem_max != null && w.mem_req != null && w.mem_max > w.mem_req)
-    out.push(["crit", `Память: пик ${gib(w.mem_max)} выше request ${gib(w.mem_req)} — риск OOM`]);
-  if (w.cpu_max != null && w.cpu_req != null && w.cpu_max > w.cpu_req)
-    out.push(["warn", `CPU: пик ${cores(w.cpu_max)} выше request ${cores(w.cpu_req)} — возможен троттлинг`]);
-  if (w.mem_waste_pct != null && w.mem_waste_pct > thr)
-    out.push(["over", `Память: запрошено ${gib(w.mem_req)}, максимум ${gib(w.mem_max)} — ${pct(w.mem_waste_pct)} не используется`]);
-  if (w.cpu_waste_pct != null && w.cpu_waste_pct > thr)
-    out.push(["over", `CPU: запрошено ${cores(w.cpu_req)}, максимум ${cores(w.cpu_max)} — ${pct(w.cpu_waste_pct)} не используется`]);
+  const tol = Math.round((report.cpu_tolerance ?? 0.2) * 100);
+  if (w.mem_action === "up" && w.mem_max > w.mem_req)
+    out.push(["crit", `Память: пик ${gib(w.mem_max)} выше request ${gib(w.mem_req)} — под могут вытеснить или убить по OOM, увеличьте request`]);
+  if (w.cpu_action === "up")
+    out.push(["warn", `CPU: пик ${cores(w.cpu_max)} выше request ${cores(w.cpu_req)} больше чем на ${tol}% — задача упирается в CPU, увеличьте request`]);
+  else if (w.cpu_max != null && w.cpu_req != null && w.cpu_max > w.cpu_req)
+    out.push(["info", `CPU: пик ${cores(w.cpu_max)} немного выше request ${cores(w.cpu_req)} — в пределах допуска ${tol}%, это нормально`]);
+  if (w.mem_action === "down")
+    out.push(["over", `Память: запрошено ${gib(w.mem_req)}, максимум ${gib(w.mem_max)} — ${pct(w.mem_waste_pct)} не используется, сократите request`]);
+  if (w.cpu_action === "down")
+    out.push(["over", `CPU: запрошено ${cores(w.cpu_req)}, максимум ${cores(w.cpu_max)} — ${pct(w.cpu_waste_pct)} не используется, сократите request`]);
   if (w.request_changed) out.push(["info", "Request менялся за период — показан последний"]);
   return out;
 }
@@ -378,7 +397,7 @@ const WL_COLS = [
   W("workload", "Задача", (r) => esc(r.workload), {l: 1, cls: "w", csv: (r) => r.workload}),
   W("dag_id", "DAG", (r) => esc(r.dag_id), {l: 1, label: 1}),
   W("task_id", "Task", (r) => esc(r.task_id), {l: 1, label: 1}),
-  W("status", "Статус", (r) => badge(r.status), {l: 1, csv: (r) => (STATUS[r.status] || [, , r.status])[2]}),
+  W("status", "Что сделать", (r) => actions(r), {l: 1, csv: (r) => actionText(r)}),
   W("runs", "Запусков", (r) => r.runs),
   W("runtime_h", "Время", (r) => hours(r.runtime_h), {csv: (r) => r.runtime_h}),
   W("mem_idle_gh", "Простой памяти, GiB·ч", (r) => fmt(r.mem_idle_gh, 0), {csv: (r) => r.mem_idle_gh}),
@@ -453,11 +472,11 @@ function renderTable(el, cols, rows, s, onSort, rowAttr) {
 function filteredWorkloads() {
   const s = st.wl, q = s.q.toLowerCase();
   const rows = report.workloads.filter((w) =>
-    (s.f === "all" || (s.f === "issues" && w.status !== "ok") ||
-     (s.f === "over" && (w.status === "over" || w.status === "risky+waste")) ||
-     (s.f === "under" && (w.status === "under" || w.status === "risky+waste" || w.oom_runs))) &&
+    (s.f === "all" || (s.f === "issues" && actionRank(w) > 0) ||
+     (s.f === "over" && (w.mem_action === "down" || w.cpu_action === "down")) ||
+     (s.f === "under" && (w.mem_action === "up" || w.cpu_action === "up" || w.oom_runs))) &&
     (!q || `${w.workload} ${w.dag_id} ${w.task_id} ${w.namespace} ${w.container}`.toLowerCase().includes(q)));
-  return sortRows(rows, s.sort, s.asc, (r, k) => r[k]);
+  return sortRows(rows, s.sort, s.asc, (r, k) => k === "status" ? actionRank(r) * 1000 + (r.mem_idle_gh || 0) / 1e6 : r[k]);
 }
 function filteredRuns() {
   const s = st.runs, q = s.q.toLowerCase();
@@ -492,7 +511,10 @@ function renderDetail(w) {
   const notes = notesFor(w);
   const memSave = w.mem_req != null && w.mem_rec != null ? w.mem_req - w.mem_rec : null;
   const cpuSave = w.cpu_req != null && w.cpu_rec != null ? w.cpu_req - w.cpu_rec : null;
-  const saveTxt = (v, f) => v == null ? "" : v > 0 ? `<span class="save">−${f(v)} на каждый запуск</span>` : `<span class="muted">нужно больше на ${f(-v)}</span>`;
+  const saveTxt = (act, v, f) => v == null ? "" :
+    act === "up" ? `<span class="need">нужно больше: +${f(-v)} к request</span>` :
+    act === "down" ? `<span class="save">можно снять ${f(v)} с каждого запуска</span>` :
+    `<span class="muted">${v >= 0 ? `в пределах нормы, можно снять ${f(v)}` : "в пределах нормы"}</span>`;
   const yaml = [
     `resources:`,
     `  requests:`,
@@ -507,17 +529,17 @@ function renderDetail(w) {
   el.innerHTML = `<div class="card detail">
     <div class="d-head">
       <button class="btn ghost" id="d-back" title="Ко всем задачам">${icon("i-back")}</button>
-      <h3>${esc(w.workload)}</h3>${badge(w.status)}
+      <h3>${esc(w.workload)}</h3>${actions(w)}
     </div>
     <div class="d-meta">${esc(w.namespace)} · контейнер ${esc(w.container)}${w.dag_id ? ` · DAG ${esc(w.dag_id)} · task ${esc(w.task_id)}` : ""}
       · ${w.runs} запусков, суммарно ${hours(w.runtime_h)} · простой ${fmt(w.mem_idle_gh, 0)} GiB·ч памяти, ${fmt(w.cpu_idle_ch, 0)} core·ч CPU</div>
     <div class="d-grid">
       <div class="res"><div class="k">Память · request → рекомендация</div>
-        <div class="now"><span>${gib(w.mem_req)}</span><span class="arrow">→</span><span class="rec">${gib(w.mem_rec)}</span></div>
-        <div class="s">пик ${gib(w.mem_max)}, в среднем ${gib(w.mem_avg)}</div><div class="s">${saveTxt(memSave, gib)}</div></div>
+        <div class="now"><span>${gib(w.mem_req)}</span><span class="arrow">→</span><span class="rec ${w.mem_action}">${gib(w.mem_rec)}</span></div>
+        <div class="s">пик ${gib(w.mem_max)}, в среднем ${gib(w.mem_avg)}</div><div class="s">${saveTxt(w.mem_action, memSave, gib)}</div></div>
       <div class="res"><div class="k">CPU · request → рекомендация</div>
-        <div class="now"><span>${cores(w.cpu_req)}</span><span class="arrow">→</span><span class="rec">${cores(w.cpu_rec)}</span></div>
-        <div class="s">пик ${cores(w.cpu_max)}, в среднем ${cores(w.cpu_avg)}</div><div class="s">${saveTxt(cpuSave, cores)}</div></div>
+        <div class="now"><span>${cores(w.cpu_req)}</span><span class="arrow">→</span><span class="rec ${w.cpu_action}">${cores(w.cpu_rec)}</span></div>
+        <div class="s">пик ${cores(w.cpu_max)}, в среднем ${cores(w.cpu_avg)}</div><div class="s">${saveTxt(w.cpu_action, cpuSave, cores)}</div></div>
       <div class="yaml"><button class="btn" id="d-copy">${icon("i-copy")}Копировать</button><pre id="d-yaml">${esc(yaml)}</pre></div>
     </div>
     ${notes.length ? `<ul class="notes-list">${notes.map(([k, t]) => `<li><svg style="${ncls[k]}"><use href="#${nico[k]}"/></svg>${esc(t)}</li>`).join("")}</ul>` : ""}
@@ -593,8 +615,8 @@ function renderSummary() {
   const kpi = (l, v, unit, sub, ic) => `<div class="card kpi"><div class="l">${ic ? `<svg class="ico" style="color:${ic[1]}"><use href="#${ic[0]}"/></svg>` : ""}${l}</div>
     <div class="v num">${v}${unit ? `<small>${unit}</small>` : ""}</div><div class="s">${sub}</div></div>`;
   $("#kpis").innerHTML =
-    kpi("Задачи с перерасходом", s.over, `из ${s.workloads}`, `больше ${Math.round(report.waste_threshold * 100)}% request не используется`, ["i-down-arrow", "var(--serious)"]) +
-    kpi("Нехватка ресурсов", s.under, "", `OOMKilled запусков: ${s.oom_runs}`, s.under || s.oom_runs ? ["i-warn", "var(--crit)"] : ["i-ok", "var(--good)"]) +
+    kpi("Можно сократить", s.over, `из ${s.workloads} задач`, `больше ${Math.round(report.waste_threshold * 100)}% request по памяти или CPU не используется`, ["i-down-arrow", "var(--serious)"]) +
+    kpi("Нужно больше ресурсов", s.under, "", `пик выше request или OOM · OOMKilled запусков: ${s.oom_runs}`, s.under || s.oom_runs ? ["i-warn", "var(--crit)"] : ["i-ok", "var(--good)"]) +
     kpi("Простой памяти", big(s.mem_idle_gh), "GiB·ч", `${share(s.mem_idle_gh, s.mem_req_gh)} зарезервированного не использовано`) +
     kpi("Запусков за период", big(s.runs), "", `${report.lookback_days} дн. · ${s.workloads} задач`);
   $("#ov-sub").textContent = `Сумма request × время работы всех ${big(s.runs)} запусков за ${report.lookback_days} дн.`;
@@ -616,7 +638,7 @@ function renderSummary() {
   const c = clusters.find((x) => x.id === cid);
   $("#meta").textContent = `${(report.namespaces.join(", ") || "все неймспейсы")} · ${report.lookback_days} дн. · отчёт ${dtFull(report.generated_at)}`;
   $("#meta").title = c ? c.url : "";
-  $("#c-wl").textContent = report.workloads.filter((w) => w.status !== "ok").length;
+  $("#c-wl").textContent = report.workloads.filter((w) => actionRank(w) > 0).length;
   $("#c-runs").textContent = report.runs.length;
 }
 

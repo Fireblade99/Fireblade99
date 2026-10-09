@@ -212,3 +212,26 @@ def test_proxy_env_ignored_by_default():
 ])
 def test_base_name(pod, base):
     assert extract_base_name(pod) == base
+
+
+def _group(cpu_req, cpu_max, mem_req, mem_max, oom=False):
+    from src.core.grouper import WorkloadGroup
+    from src.core.runs import PodRun
+
+    g = WorkloadGroup(namespace=NS, base_name="w", container="base")
+    g.cpu_request, g.max_cpu_usage, g.memory_request, g.max_memory_usage = cpu_req, cpu_max, mem_req, mem_max
+    g.runs = [PodRun(NS, "w-abcdefgh", "base", "w", 0, 3600, oom_killed=oom)]
+    return g
+
+
+@pytest.mark.parametrize("cpu_req,cpu_max,mem_req,mem_max,oom,cpu_act,mem_act,risky", [
+    # CPU 4% above request is within the 20% tolerance; memory 40% unused is below the 50% threshold
+    (1.0, 1.04, 60 * GI, 30 * GI * 1.2, False, "ok", "ok", False),
+    (1.0, 1.30, 60 * GI, 2 * GI, False, "up", "down", True),
+    (4.0, 0.5, 8 * GI, 9 * GI, False, "down", "up", True),
+    (1.0, 0.9, 8 * GI, 4 * GI, True, "ok", "up", True),
+])
+def test_actions_per_resource(cpu_req, cpu_max, mem_req, mem_max, oom, cpu_act, mem_act, risky):
+    rec = Recommender().recommend(_group(cpu_req, cpu_max, mem_req, mem_max, oom))
+    assert (rec.cpu_action, rec.memory_action, rec.is_risky) == (cpu_act, mem_act, risky)
+

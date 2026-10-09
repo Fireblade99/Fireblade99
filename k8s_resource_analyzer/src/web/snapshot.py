@@ -75,6 +75,8 @@ def build_snapshot(
             "oom_runs": g.oom_runs,
             "request_changed": g.request_changed,
             "status": _status(rec),
+            "cpu_action": rec.cpu_action,
+            "mem_action": rec.memory_action,
             "notes": rec.reasons,
         })
         for run in g.runs:
@@ -108,8 +110,8 @@ def build_snapshot(
     summary = {
         "workloads": len(workloads),
         "runs": len(all_runs),
-        "over": sum(1 for w in workloads if w["status"] in ("over", "risky+waste")),
-        "under": sum(1 for w in workloads if w["status"] in ("under", "risky+waste")),
+        "over": sum(1 for w in workloads if "down" in (w["mem_action"], w["cpu_action"])),
+        "under": sum(1 for w in workloads if "up" in (w["mem_action"], w["cpu_action"])),
         "oom_runs": sum(1 for r in all_runs if r.oom_killed),
         "mem_waste_gib": round(sum(w["mem_waste"] or 0 for w in flagged if w["status"] != "under"), 1),
         "cpu_waste_cores": round(sum(w["cpu_waste"] or 0 for w in flagged if w["status"] != "under"), 2),
@@ -127,6 +129,7 @@ def build_snapshot(
         "namespaces": list(config.analysis.namespaces or []),
         "source": mask_url(config.prometheus.url),
         "waste_threshold": config.analysis.waste_threshold_ratio,
+        "cpu_tolerance": config.analysis.cpu_under_tolerance,
         "request_buffer": config.analysis.memory_request_buffer,
         "summary": summary,
         "workloads": workloads,

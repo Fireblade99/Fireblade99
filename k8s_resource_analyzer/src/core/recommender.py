@@ -33,6 +33,10 @@ class Recommendation:
 
     is_wasteful: bool = False      # over-provisioned beyond threshold
     is_risky: bool = False         # under-provisioned (OOM / throttle risk)
+
+    # Per-resource verdict: "down" (request can be cut), "up" (needs more), "ok"
+    cpu_action: str = "ok"
+    memory_action: str = "ok"
     reasons: List[str] = field(default_factory=list)
 
     # ------------------------------------------------------------------
@@ -82,6 +86,7 @@ class Recommender:
         waste_threshold_ratio: float = 0.50,
         min_waste_cpu_cores: float = 0.10,
         min_waste_memory_mb: float = 100.0,
+        cpu_under_tolerance: float = 0.20,
     ) -> None:
         self._cpu_req_buf = cpu_request_buffer
         self._mem_req_buf = memory_request_buffer
@@ -90,6 +95,9 @@ class Recommender:
         self._waste_ratio = waste_threshold_ratio
         self._min_cpu = min_waste_cpu_cores
         self._min_mem = min_waste_memory_mb * 1024 * 1024  # → bytes
+        # CPU is compressible: bursting a bit above the request is normal,
+        # flag it only when the peak is this much above the request
+        self._cpu_tol = cpu_under_tolerance
 
     # ------------------------------------------------------------------
 
@@ -114,14 +122,16 @@ class Recommender:
                     and rec.cpu_waste_ratio > self._waste_ratio
                     and waste > self._min_cpu
                 ):
+                    rec.cpu_action = "down"
                     reasons.append(
                         f"CPU request is {rec.cpu_waste_ratio:.0%} wasted "
                         f"({group.cpu_request:.3f} cores requested, "
                         f"{group.max_cpu_usage:.3f} cores max used)"
                     )
 
-                if waste < 0:
+                if group.max_cpu_usage > group.cpu_request * (1 + self._cpu_tol):
                     rec.is_risky = True
+                    rec.cpu_action = "up"
                     reasons.append(
                         f"CPU under-provisioned: max usage {group.max_cpu_usage:.3f} cores "
                         f"exceeds request {group.cpu_request:.3f} cores (throttle risk)"
@@ -146,6 +156,7 @@ class Recommender:
                 ):
                     from ..utils import fmt_bytes  # local import avoids cycles
 
+                    rec.memory_action = "down"
                     reasons.append(
                         f"Memory request is {rec.memory_waste_ratio:.0%} wasted "
                         f"({fmt_bytes(group.memory_request)} requested, "
@@ -154,6 +165,7 @@ class Recommender:
 
                 if waste < 0:
                     rec.is_risky = True
+                    rec.memory_action = "up"
                     from ..utils import fmt_bytes
 
                     reasons.append(
@@ -165,6 +177,7 @@ class Recommender:
         # ── OOM kills (peak memory before the kill may be under the request) ──
         if group.oom_runs:
             rec.is_risky = True
+            rec.memory_action = "up"
             reasons.append(
                 f"OOMKilled in {group.oom_runs} of {len(group.runs)} runs "
                 f"(memory limit {_fmt_bytes(group.memory_limit)})"

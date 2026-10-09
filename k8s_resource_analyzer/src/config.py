@@ -41,6 +41,8 @@ class AnalysisConfig:
     waste_threshold_ratio: float = 0.50
     min_waste_cpu_cores: float = 0.10
     min_waste_memory_mb: float = 100.0
+    # CPU is compressible: a peak up to this much above the request is not a shortage
+    cpu_under_tolerance: float = 0.20
     # kube-state-metrics label names of the Airflow pod labels
     # (empty values are fine: the columns stay blank)
     airflow_labels: Dict[str, str] = field(
