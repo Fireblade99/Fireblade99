@@ -4,210 +4,423 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>K8s Resource Waste</title>
-<link rel="icon" href="data:,">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232a78d6'/%3E%3Crect x='7' y='16' width='4' height='9' rx='1' fill='white'/%3E%3Crect x='14' y='10' width='4' height='15' rx='1' fill='white'/%3E%3Crect x='21' y='6' width='4' height='19' rx='1' fill='%23ffb48f'/%3E%3C/svg%3E">
 <style>
 :root {
-  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085; --line: #e3e6eb;
-  --accent: #1f4e79; --accent-2: #2e75b6; --head: #eef2f7;
-  --red: #fde2e2; --red-t: #a61b1b; --orange: #ffe7cc; --yellow: #fff4c2; --green: #dcf3e2;
-  --risky: #fff2cc; --chip: #eef2f7;
+  color-scheme: light;
+  --page: #f4f5f2; --surface: #fcfcfb; --surface-2: #f1f1ee; --hover: #eeeeea;
+  --text: #0b0b0b; --text-2: #52514e; --muted: #898781;
+  --line: #e1e0d9; --line-2: #c3c2b7; --ring: rgba(11,11,11,.10);
+  --accent: #2a78d6; --accent-ink: #1c5cab; --accent-soft: #e3eefc;
+  --s1: #2a78d6; --s2: #eb6834;
+  --good: #0ca30c; --good-ink: #006300; --good-soft: #e3f4e3;
+  --warn: #fab219; --warn-soft: #fff3d6;
+  --serious: #ec835a; --serious-soft: #fde6dc;
+  --crit: #d03b3b; --crit-ink: #a52a2a; --crit-soft: #fbe3e3;
+  --shadow: 0 1px 2px rgba(11,11,11,.04), 0 2px 8px rgba(11,11,11,.04);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #12151b; --panel: #1a1f27; --text: #e6e9ef; --muted: #98a2b3; --line: #2b323d;
-    --accent: #6ea8dc; --accent-2: #4f8fca; --head: #212834;
-    --red: #4a2125; --red-t: #ff9b9b; --orange: #4a3420; --yellow: #45401f; --green: #1f3d2a;
-    --risky: #3f3820; --chip: #262d39;
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #222220; --hover: #262624;
+    --text: #ffffff; --text-2: #c3c2b7; --muted: #898781;
+    --line: #2c2c2a; --line-2: #383835; --ring: rgba(255,255,255,.10);
+    --accent: #3987e5; --accent-ink: #86b6ef; --accent-soft: #17283d;
+    --s1: #3987e5; --s2: #d95926;
+    --good-ink: #0ca30c; --good-soft: #15291a;
+    --warn-soft: #33290f;
+    --serious-soft: #3a2218;
+    --crit: #e66767; --crit-ink: #ff9b9b; --crit-soft: #3a1a1a;
+    --shadow: none;
   }
 }
 * { box-sizing: border-box; }
-body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
-header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 14px 24px; display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; }
-header h1 { font-size: 18px; margin: 0; color: var(--accent); }
-.meta { color: var(--muted); font-size: 13px; }
+html, body { margin: 0; }
+body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--page); color: var(--text); }
+button, input, select { font: inherit; color: inherit; }
+.num, td.r, .tnum { font-variant-numeric: tabular-nums; }
+
+/* ── Top bar ─────────────────────────────────────────── */
+.top { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--line); }
+.top-in { max-width: 1760px; margin: 0 auto; padding: 10px 24px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.brand { display: flex; align-items: center; gap: 10px; margin-right: 8px; }
+.logo { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; }
+.brand b { font-size: 15px; letter-spacing: -.01em; }
+.brand small { display: block; color: var(--muted); font-size: 12px; }
 .spacer { flex: 1; }
-button, .btn { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; border-radius: 6px; cursor: pointer; text-decoration: none; }
-button.primary { background: var(--accent-2); color: #fff; border-color: var(--accent-2); }
-button:disabled { opacity: .55; cursor: default; }
-main { padding: 18px 24px 40px; max-width: 1800px; margin: 0 auto; }
-.notice { padding: 10px 14px; border-radius: 6px; margin-bottom: 14px; background: var(--risky); }
-.notice.err { background: var(--red); color: var(--red-t); white-space: pre-wrap; }
-.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; margin-bottom: 18px; }
-.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
-.tile .v { font-size: 22px; font-weight: 600; margin-top: 2px; }
-.tile .l { color: var(--muted); font-size: 12.5px; }
-.tile .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
-.tab { padding: 8px 14px; border: none; background: none; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted); }
-.tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.select { appearance: none; padding: 7px 34px 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface)
+  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' fill='none' stroke='%23898781' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 12px center; min-width: 220px; cursor: pointer; }
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); cursor: pointer; text-decoration: none; color: var(--text); white-space: nowrap; }
+.btn:hover { background: var(--hover); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn:disabled { opacity: .55; cursor: default; }
+.btn svg { width: 15px; height: 15px; flex: none; }
+.pill { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-2); padding: 4px 10px; border-radius: 999px; background: var(--surface-2); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); flex: none; }
+.dot.run { background: var(--accent); animation: pulse 1.2s infinite; }
+.dot.err { background: var(--crit); }
+@keyframes pulse { 50% { opacity: .3; } }
+
+main { max-width: 1760px; margin: 0 auto; padding: 18px 24px 48px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+.notice { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 10px; margin-bottom: 14px; background: var(--warn-soft); }
+.notice.err { background: var(--crit-soft); color: var(--crit-ink); }
+.notice pre { margin: 4px 0 0; white-space: pre-wrap; font: 12px/1.4 ui-monospace, Consolas, monospace; }
+
+/* ── KPI tiles ───────────────────────────────────────── */
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.kpi { padding: 14px 16px; }
+.kpi .l { color: var(--text-2); font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
+.kpi .v { font-size: 26px; font-weight: 650; letter-spacing: -.02em; margin-top: 4px; }
+.kpi .v small { font-size: 14px; font-weight: 500; color: var(--text-2); margin-left: 4px; letter-spacing: 0; }
+.kpi .s { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.kpi .ico { width: 16px; height: 16px; }
+
+/* ── Overview charts ─────────────────────────────────── */
+.overview { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 12px; margin-bottom: 18px; }
+.panel { padding: 14px 16px 16px; }
+.panel h2 { font-size: 14px; margin: 0; font-weight: 600; }
+.panel .sub { color: var(--muted); font-size: 12.5px; margin: 2px 0 12px; }
+.legend { display: flex; gap: 14px; font-size: 12.5px; color: var(--text-2); margin-bottom: 10px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.split { margin-bottom: 14px; }
+.split .row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+.split .row b { font-weight: 600; }
+.split .row span { color: var(--text-2); }
+.bar2 { display: flex; height: 14px; gap: 2px; border-radius: 4px; overflow: hidden; }
+.bar2 div { height: 100%; }
+.bar2 .u { background: var(--s1); border-radius: 4px 0 0 4px; }
+.bar2 .i { background: var(--s2); border-radius: 0 4px 4px 0; }
+.bar2 .u:only-child, .bar2 .i:only-child { border-radius: 4px; }
+.hbars { display: grid; gap: 6px; }
+.hb { display: grid; grid-template-columns: minmax(120px, 34%) 1fr 74px; gap: 10px; align-items: center; cursor: pointer; padding: 2px 4px; border-radius: 6px; }
+.hb:hover { background: var(--hover); }
+.hb .n { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
+.hb .t { height: 12px; }
+.hb .t div { height: 100%; background: var(--s2); border-radius: 0 4px 4px 0; min-width: 2px; }
+.hb .v { font-size: 12.5px; text-align: right; color: var(--text); }
+.empty { padding: 30px; text-align: center; color: var(--muted); }
+
+/* ── Tabs, toolbar, tables ───────────────────────────── */
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.tab { padding: 9px 14px; border: none; background: none; border-bottom: 2px solid transparent; color: var(--text-2); cursor: pointer; font-weight: 500; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent-ink); border-bottom-color: var(--accent); }
+.tab .c { display: inline-block; min-width: 20px; padding: 0 6px; margin-left: 6px; border-radius: 10px; background: var(--surface-2); color: var(--text-2); font-size: 12px; }
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
-.toolbar input[type=search] { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; min-width: 280px; background: var(--panel); color: var(--text); }
-.chip { padding: 5px 10px; border-radius: 14px; background: var(--chip); border: 1px solid transparent; }
-.chip.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
-.count { color: var(--muted); font-size: 13px; margin-left: auto; }
-.wrap { overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; max-height: calc(100vh - 230px); }
-table { border-collapse: collapse; width: 100%; font-size: 13px; }
-th, td { padding: 6px 9px; border-bottom: 1px solid var(--line); white-space: nowrap; text-align: right; }
-th { position: sticky; top: 0; background: var(--head); z-index: 1; cursor: pointer; user-select: none; font-weight: 600; }
+.search { position: relative; }
+.search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); width: 15px; height: 15px; color: var(--muted); }
+.search input { padding: 7px 10px 7px 32px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); width: 300px; }
+.seg { display: inline-flex; background: var(--surface-2); border-radius: 9px; padding: 3px; gap: 2px; }
+.seg button { border: none; background: none; padding: 5px 11px; border-radius: 7px; cursor: pointer; color: var(--text-2); }
+.seg button.active { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--ring); font-weight: 500; }
+.count { color: var(--muted); font-size: 12.5px; }
+.tablewrap { overflow: auto; max-height: calc(100vh - 210px); border-radius: 12px; }
+table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 13px; }
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; text-align: right; }
+th { position: sticky; top: 0; z-index: 2; background: var(--surface-2); color: var(--text-2); font-weight: 600; font-size: 12px; cursor: pointer; user-select: none; }
+th:hover { color: var(--text); }
 th.l, td.l { text-align: left; }
-th.sorted::after { content: " ▾"; }
-th.sorted.asc::after { content: " ▴"; }
-tbody tr:hover { background: var(--head); }
+th.sorted { color: var(--accent-ink); }
+th.sorted::after { content: " ↓"; }
+th.sorted.asc::after { content: " ↑"; }
+td:first-child, th:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
+th:first-child { z-index: 3; background: var(--surface-2); }
+tbody tr:hover td { background: var(--hover); }
 tr.click { cursor: pointer; }
-td.notes { max-width: 420px; overflow: hidden; text-overflow: ellipsis; text-align: left; color: var(--muted); }
-.w80 { background: var(--red); } .w60 { background: var(--orange); } .w40 { background: var(--yellow); } .w0 { background: var(--green); }
-.neg { background: var(--risky); }
-.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; }
-.b-over { background: var(--red); color: var(--red-t); } .b-under { background: var(--risky); } .b-both { background: var(--orange); } .b-ok { background: var(--green); }
-.detail { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
-.detail h3 { margin: 0 0 6px; font-size: 15px; }
-.detail ul { margin: 6px 0 0 18px; padding: 0; }
-.more { margin: 10px auto; display: block; }
-select, .cl-table input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 16px; }
-.panel h3 { margin: 0 0 4px; font-size: 15px; }
-.cl-table { width: 100%; margin: 10px 0; }
-.cl-table td, .cl-table th { text-align: left; border: none; padding: 4px 6px 4px 0; cursor: default; background: none; position: static; }
-.cl-table input { width: 100%; }
-.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.empty { padding: 40px; text-align: center; color: var(--muted); }
-.hint { color: var(--muted); font-size: 12.5px; margin: 6px 0 14px; }
-@media (max-width: 700px) { header, main { padding-left: 12px; padding-right: 12px; } .toolbar input[type=search] { min-width: 0; width: 100%; } }
+tbody tr:last-child td { border-bottom: none; }
+td.w { font-weight: 500; max-width: 380px; overflow: hidden; text-overflow: ellipsis; }
+td.notes { max-width: 380px; overflow: hidden; text-overflow: ellipsis; text-align: left; color: var(--text-2); }
+.chip { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 12px; }
+.c80 { background: var(--crit-soft); color: var(--crit-ink); }
+.c60 { background: var(--serious-soft); }
+.c40 { background: var(--warn-soft); }
+.cneg { background: var(--warn-soft); }
+.muted { color: var(--muted); }
+.badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; }
+.badge svg { width: 12px; height: 12px; }
+.b-over { background: var(--serious-soft); color: var(--text); }
+.b-over svg { color: var(--serious); }
+.b-under { background: var(--crit-soft); color: var(--crit-ink); }
+.b-both { background: var(--crit-soft); color: var(--crit-ink); }
+.b-ok { background: var(--good-soft); color: var(--good-ink); }
+.more { margin: 12px auto 0; display: block; }
+
+/* ── Workload detail ─────────────────────────────────── */
+.detail { padding: 16px 18px; margin-bottom: 14px; }
+.d-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.d-head h3 { margin: 0; font-size: 16px; }
+.d-meta { color: var(--text-2); font-size: 12.5px; margin-top: 3px; }
+.d-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(280px, 1.1fr); gap: 12px; margin-top: 14px; }
+.res { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.res .k { color: var(--text-2); font-size: 12px; }
+.res .now { display: flex; align-items: baseline; gap: 8px; margin-top: 4px; font-size: 20px; font-weight: 650; }
+.res .now .arrow { color: var(--muted); font-weight: 400; font-size: 16px; }
+.res .now .rec { color: var(--good-ink); }
+.res .s { color: var(--text-2); font-size: 12.5px; margin-top: 4px; }
+.res .save { color: var(--good-ink); font-weight: 600; }
+.yaml { position: relative; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.yaml pre { margin: 0; padding: 12px 14px; font: 12.5px/1.55 ui-monospace, Consolas, monospace; overflow: auto; }
+.yaml .btn { position: absolute; top: 8px; right: 8px; padding: 4px 9px; font-size: 12px; }
+.notes-list { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 13px; }
+.notes-list li { display: flex; gap: 8px; align-items: flex-start; }
+.notes-list svg { width: 15px; height: 15px; flex: none; margin-top: 2px; }
+.charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+.chart { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px 6px; }
+.chart h4 { margin: 0; font-size: 13px; font-weight: 600; }
+.chart .sub { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+.chart svg { display: block; width: 100%; height: 170px; overflow: visible; }
+.chart .grid line { stroke: var(--line); }
+.chart .axis text { fill: var(--muted); font-size: 10.5px; }
+.chart .bar { fill: var(--s1); }
+.chart .bar.hot { fill: var(--accent-ink); }
+.chart .ref { stroke: var(--text-2); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.chart .recl { stroke: var(--good); stroke-width: 2; }
+.chart .reflab { font-size: 11px; fill: var(--text-2); }
+.chart .reclab { font-size: 11px; fill: var(--good-ink); font-weight: 600; }
+.tip { position: fixed; z-index: 50; pointer-events: none; background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.14); padding: 8px 10px; font-size: 12.5px; line-height: 1.5; display: none; max-width: 300px; }
+.tip b { font-weight: 600; }
+
+/* ── Clusters editor ─────────────────────────────────── */
+.clusters { padding: 16px 18px; margin-bottom: 14px; }
+.clusters h2 { margin: 0; font-size: 15px; }
+.clusters .sub { color: var(--text-2); font-size: 12.5px; margin: 4px 0 12px; }
+.cl-row { display: grid; grid-template-columns: 1fr 2.4fr 1.6fr 1.3fr 36px; gap: 8px; margin-bottom: 8px; align-items: center; }
+.cl-row.h { font-size: 12px; color: var(--text-2); font-weight: 600; margin-bottom: 4px; }
+.cl-row input { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.cl-row input:focus, .search input:focus, .select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.cl-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 4px; }
+.cl-err { color: var(--crit-ink); font-size: 13px; }
+.hint { color: var(--muted); font-size: 12px; margin-top: 10px; line-height: 1.5; }
+
+@media (max-width: 1100px) {
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .overview, .d-grid, .charts { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .top { position: static; }
+  .top-in, main { padding-left: 12px; padding-right: 12px; }
+  .search input { width: 100%; } .search { flex: 1 1 100%; }
+  .cl-row { grid-template-columns: 1fr; } .cl-row.h { display: none; }
+  .select { min-width: 0; flex: 1; }
+}
 </style>
 </head>
 <body>
-<header>
-  <div><h1>Kubernetes Resource Waste</h1><div class="meta" id="meta">загрузка…</div></div>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-down" viewBox="0 0 16 16"><path d="M8 2.5v8m0 0L4.8 7.3M8 10.5l3.2-3.2M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M3.6 12.4l1.2-1.2M11.2 4.8l1.2-1.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.5 10.5l3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-down-arrow" viewBox="0 0 16 16"><path d="M8 3v10m0 0l-4-4m4 4l4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 16 16"><path d="M8 2l6.5 11.5h-13z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 6.5v3.2M8 11.6v.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-ok" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.3 8.2l1.9 1.9 3.6-3.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 7.2v4M8 4.9v.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5" y="5" width="8.5" height="8.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+  <symbol id="i-back" viewBox="0 0 16 16"><path d="M10 3L5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<header class="top"><div class="top-in">
+  <div class="brand">
+    <div class="logo"><svg width="18" height="18" viewBox="0 0 32 32"><rect x="5" y="16" width="5" height="11" rx="1.5" fill="#fff"/><rect x="13.5" y="9" width="5" height="18" rx="1.5" fill="#fff"/><rect x="22" y="4" width="5" height="23" rx="1.5" fill="#ffb48f"/></svg></div>
+    <div><b>Resource Waste</b><small id="meta">загрузка…</small></div>
+  </div>
+  <select id="cluster" class="select" title="Кластер"></select>
+  <button id="edit-clusters" class="btn ghost" hidden title="Кластеры: добавить, изменить URL, неймспейсы"><svg><use href="#i-gear"/></svg>Кластеры</button>
   <div class="spacer"></div>
-  <select id="cluster" title="Кластер"></select>
-  <button id="edit-clusters" hidden>Кластеры…</button>
-  <span class="meta" id="state"></span>
-  <button id="refresh" class="primary" title="Запустить анализ сейчас">Обновить</button>
-  <a class="btn" id="xlsx" href="report.xlsx">Скачать Excel</a>
-</header>
+  <span class="pill" id="state"><span class="dot"></span><span>—</span></span>
+  <button id="refresh" class="btn primary" title="Запустить анализ сейчас"><svg><use href="#i-refresh"/></svg>Обновить</button>
+  <a class="btn" id="xlsx" href="report.xlsx"><svg><use href="#i-down"/></svg>Excel</a>
+</div></header>
+
 <main>
-  <section class="panel" id="clusters-panel" hidden>
-    <h3>Кластеры</h3>
-    <div class="meta">URL — Prometheus API VictoriaMetrics (…/select/0/prometheus). Неймспейсы через запятую; пусто — все.
-      После изменения URL или неймспейсов отчёт кластера пересчитывается.</div>
-    <table class="cl-table"><thead><tr><th style="width:18%">Имя</th><th style="width:47%">URL</th><th>Неймспейсы</th><th></th></tr></thead>
-      <tbody id="cl-rows"></tbody></table>
-    <div class="row">
-      <button id="cl-add">+ Добавить кластер</button>
+  <section class="card clusters" id="clusters-panel" hidden>
+    <h2>Кластеры</h2>
+    <div class="sub">У каждого кластера свой источник метрик и свой отчёт. Изменение URL или неймспейсов пересчитывает отчёт кластера.</div>
+    <div class="cl-row h"><div>Имя</div><div>URL метрик (VictoriaMetrics / Prometheus)</div><div>Неймспейсы через запятую</div><div>Прокси (если нужен)</div><div></div></div>
+    <div id="cl-rows"></div>
+    <div class="cl-foot">
+      <button class="btn" id="cl-add">+ Добавить кластер</button>
       <span class="spacer"></span>
-      <span class="meta" id="cl-err" style="color:var(--red-t)"></span>
-      <button id="cl-cancel">Отмена</button>
-      <button id="cl-save" class="primary">Сохранить</button>
+      <span class="cl-err" id="cl-err"></span>
+      <button class="btn" id="cl-cancel">Отмена</button>
+      <button class="btn primary" id="cl-save">Сохранить</button>
+    </div>
+    <div class="hint">
+      URL: VictoriaMetrics cluster — <code>http://&lt;vmselect&gt;/select/0/prometheus</code>, single-node — <code>http://&lt;host&gt;:8428</code>, Prometheus — <code>http://&lt;host&gt;:9090</code>.
+      Логин и пароль (vmauth) — прямо в URL: <code>http://user:pass@host/…</code>, в интерфейсе пароль скрыт.
+      Неймспейсы пусто — все (тяжелее для VM). Прокси — только если до VM нельзя достучаться напрямую с этого хоста.
     </div>
   </section>
+
   <div id="notices"></div>
+
   <div id="content" hidden>
-  <div class="tiles" id="tiles"></div>
-  <div class="hint">
-    <b>Waste</b> = request − пик за неделю. <b>Простой</b> (GiB·ч, core·ч) = (request − среднее) × время работы. Это резерв на нодах, который
-    никто не использовал; учитывает частоту и длительность запусков. <b>Рекомендация</b> = пик × <span id="buf">1.2</span>.
-  </div>
-  <div class="tabs">
-    <button class="tab active" data-tab="wl">Задачи</button>
-    <button class="tab" data-tab="runs">Запуски</button>
-  </div>
+    <section class="kpis" id="kpis"></section>
+    <section class="overview">
+      <div class="card panel">
+        <h2>Резерв против фактического использования</h2>
+        <div class="sub" id="ov-sub"></div>
+        <div class="legend"><span><i style="background:var(--s1)"></i>Использовано</span><span><i style="background:var(--s2)"></i>Простой резерва</span></div>
+        <div id="splits"></div>
+      </div>
+      <div class="card panel">
+        <h2>Топ-10 по простою памяти</h2>
+        <div class="sub">(request − среднее) × время работы за период, GiB·ч. Клик — запуски задачи</div>
+        <div class="hbars" id="top-idle"></div>
+      </div>
+    </section>
 
-  <section id="tab-wl">
-    <div class="toolbar">
-      <input type="search" id="wl-q" placeholder="Поиск: workload, DAG, task…">
-      <button class="chip active" data-f="issues">Проблемные</button>
-      <button class="chip" data-f="over">Перерасход</button>
-      <button class="chip" data-f="under">Нехватка / OOM</button>
-      <button class="chip" data-f="all">Все</button>
-      <span class="count" id="wl-count"></span>
-    </div>
-    <div class="wrap"><table id="wl-table"><thead></thead><tbody></tbody></table></div>
-  </section>
+    <nav class="tabs">
+      <button class="tab active" data-tab="wl">Задачи <span class="c" id="c-wl"></span></button>
+      <button class="tab" data-tab="runs">Запуски <span class="c" id="c-runs"></span></button>
+    </nav>
 
-  <section id="tab-runs" hidden>
-    <div id="run-detail"></div>
-    <div class="toolbar">
-      <input type="search" id="run-q" placeholder="Поиск: pod, DAG, run_id…">
-      <button class="chip" id="run-clear" hidden>Все задачи ✕</button>
-      <label class="meta"><input type="checkbox" id="run-oom"> только OOM</label>
-      <span class="count" id="run-count"></span>
-    </div>
-    <div class="wrap"><table id="run-table"><thead></thead><tbody></tbody></table></div>
-    <button class="more" id="run-more" hidden>Показать ещё</button>
-  </section>
+    <section id="tab-wl">
+      <div class="toolbar">
+        <label class="search"><svg><use href="#i-search"/></svg><input type="search" id="wl-q" placeholder="Поиск по задаче, DAG…"></label>
+        <div class="seg" id="wl-seg">
+          <button data-f="issues" class="active">Проблемные</button>
+          <button data-f="over">Перерасход</button>
+          <button data-f="under">Нехватка / OOM</button>
+          <button data-f="all">Все</button>
+        </div>
+        <span class="spacer"></span>
+        <span class="count" id="wl-count"></span>
+        <button class="btn" id="wl-csv"><svg><use href="#i-down"/></svg>CSV</button>
+      </div>
+      <div class="card tablewrap"><table id="wl-table"><thead></thead><tbody></tbody></table></div>
+    </section>
+
+    <section id="tab-runs" hidden>
+      <div id="run-detail"></div>
+      <div class="toolbar">
+        <label class="search"><svg><use href="#i-search"/></svg><input type="search" id="run-q" placeholder="Поиск по поду, run_id…"></label>
+        <div class="seg"><button id="run-all-btn" class="active">Все запуски</button><button id="run-oom-btn">Только OOM</button></div>
+        <button class="btn ghost" id="run-clear" hidden><svg><use href="#i-x"/></svg>Сбросить задачу</button>
+        <span class="spacer"></span>
+        <span class="count" id="run-count"></span>
+        <button class="btn" id="run-csv"><svg><use href="#i-down"/></svg>CSV</button>
+      </div>
+      <div class="card tablewrap"><table id="run-table"><thead></thead><tbody></tbody></table></div>
+      <button class="btn more" id="run-more" hidden>Показать ещё</button>
+    </section>
   </div>
 </main>
+<div class="tip" id="tip"></div>
 
 <script>
 "use strict";
-const $ = (s) => document.querySelector(s);
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const num = (v, d = 1) => v == null ? "" : Number(v).toLocaleString("ru-RU", {maximumFractionDigits: d, minimumFractionDigits: d});
-const cores = (v) => v == null ? "" : (Math.abs(v) < 1 ? Math.round(v * 1000) + "m" : num(v, 2));
-const gib = (v) => v == null ? "" : (Math.abs(v) < 1 ? Math.round(v * 1024) + " Mi" : num(v, 1) + " Gi");
+const icon = (id) => `<svg><use href="#${id}"/></svg>`;
+const fmt = (v, d = 1) => v == null ? "" : Number(v).toLocaleString("ru-RU", {maximumFractionDigits: d, minimumFractionDigits: d});
+const cores = (v) => v == null ? "—" : (Math.abs(v) < 1 ? Math.round(v * 1000) + "m" : fmt(v, 2));
+const gib = (v) => v == null ? "—" : (Math.abs(v) < 1 ? Math.round(v * 1024) + " Mi" : fmt(v, 1) + " Gi");
 const pct = (v) => v == null ? "" : Math.round(v * 100) + "%";
+const big = (v) => v == null ? "—" : Math.round(v).toLocaleString("ru-RU");
 const dt = (ts) => ts ? new Date(ts * 1000).toLocaleString("ru-RU", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"}) : "";
-const dtFull = (ts) => ts ? new Date(ts * 1000).toLocaleString("ru-RU") : "—";
-const hours = (h) => h == null ? "" : (h < 1 ? Math.round(h * 60) + " мин" : num(h, 1) + " ч");
-const wcls = (r) => r == null || r <= 0 ? "" : r >= .8 ? "w80" : r >= .6 ? "w60" : r >= .4 ? "w40" : "w0";
-const STATUS = {
-  "over": ["b-over", "Перерасход"], "under": ["b-under", "Нехватка"],
-  "risky+waste": ["b-both", "Риск + перерасход"], "ok": ["b-ok", "OK"],
+const dtFull = (ts) => ts ? new Date(ts * 1000).toLocaleString("ru-RU", {day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit"}) : "—";
+const hours = (h) => h == null ? "" : (h < 1 ? Math.max(1, Math.round(h * 60)) + " мин" : fmt(h, 1) + " ч");
+const sevCls = (r) => r == null || r <= 0 ? "" : r >= .8 ? "c80" : r >= .6 ? "c60" : r >= .4 ? "c40" : "";
+
+// Kubernetes-friendly rounding for the YAML snippet (always up)
+const k8sCpu = (c) => c == null ? null : c < 1 ? Math.max(10, Math.ceil(c * 1000 / 50) * 50) + "m" : (Math.ceil(c * 10) / 10).toString();
+const k8sMem = (g) => {
+  if (g == null) return null;
+  if (g < 1) return Math.max(64, Math.ceil(g * 1024 / 64) * 64) + "Mi";
+  if (g >= 16) return Math.ceil(g) + "Gi";
+  const v = Math.ceil(g * 2) / 2;
+  return Number.isInteger(v) ? v + "Gi" : Math.round(v * 1024) + "Mi";
 };
+
+const STATUS = {
+  "over": ["b-over", "i-down-arrow", "Перерасход"],
+  "under": ["b-under", "i-warn", "Нехватка"],
+  "risky+waste": ["b-both", "i-warn", "Риск + перерасход"],
+  "ok": ["b-ok", "i-ok", "Норма"],
+};
+const badge = (s) => { const b = STATUS[s] || ["", "i-info", s]; return `<span class="badge ${b[0]}">${icon(b[1])}${b[2]}</span>`; };
+
+function notesFor(w) {
+  const thr = report.waste_threshold, out = [];
+  if (w.oom_runs) out.push(["crit", `OOMKilled в ${w.oom_runs} из ${w.runs} запусков — памяти не хватает`]);
+  if (w.mem_max != null && w.mem_req != null && w.mem_max > w.mem_req)
+    out.push(["crit", `Память: пик ${gib(w.mem_max)} выше request ${gib(w.mem_req)} — риск OOM`]);
+  if (w.cpu_max != null && w.cpu_req != null && w.cpu_max > w.cpu_req)
+    out.push(["warn", `CPU: пик ${cores(w.cpu_max)} выше request ${cores(w.cpu_req)} — возможен троттлинг`]);
+  if (w.mem_waste_pct != null && w.mem_waste_pct > thr)
+    out.push(["over", `Память: запрошено ${gib(w.mem_req)}, максимум ${gib(w.mem_max)} — ${pct(w.mem_waste_pct)} не используется`]);
+  if (w.cpu_waste_pct != null && w.cpu_waste_pct > thr)
+    out.push(["over", `CPU: запрошено ${cores(w.cpu_req)}, максимум ${cores(w.cpu_max)} — ${pct(w.cpu_waste_pct)} не используется`]);
+  if (w.request_changed) out.push(["info", "Request менялся за период — показан последний"]);
+  return out;
+}
 
 let report = null, wlById = new Map(), clusters = [], cid = null;
 const api = (path) => path + (cid ? (path.includes("?") ? "&" : "?") + "cluster=" + encodeURIComponent(cid) : "");
 const store = {get: (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } },
                set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } }};
 const st = {
+  tab: "wl",
   wl: {q: "", f: "issues", sort: "mem_idle_gh", asc: false},
   runs: {q: "", wid: null, oom: false, sort: "start", asc: false, limit: 300},
 };
 
-// column: [key, title, render(row) → [html, cls], left?]
+// ── Tables ──────────────────────────────────────────────
+// [key, title, render(row) → html, opts{l: left, cls, csv(row)}]
+const W = (k, t, f, o = {}) => ({k, t, f, ...o});
 const WL_COLS = [
-  ["workload", "Workload", (r) => [esc(r.workload)], 1],
-  ["dag_id", "DAG", (r) => [esc(r.dag_id)], 1],
-  ["task_id", "Task", (r) => [esc(r.task_id)], 1],
-  ["status", "Статус", (r) => { const s = STATUS[r.status] || ["", r.status]; return [`<span class="badge ${s[0]}">${s[1]}</span>`]; }, 1],
-  ["runs", "Запусков", (r) => [r.runs]],
-  ["runtime_h", "Время", (r) => [hours(r.runtime_h)]],
-  ["mem_idle_gh", "Простой Mem, GiB·ч", (r) => [num(r.mem_idle_gh, 1), r.mem_idle_gh > 0 ? "w40" : ""]],
-  ["cpu_idle_ch", "Простой CPU, core·ч", (r) => [num(r.cpu_idle_ch, 1)]],
-  ["mem_req", "Mem req", (r) => [gib(r.mem_req)]],
-  ["mem_max", "Mem max", (r) => [gib(r.mem_max)]],
-  ["mem_rec", "Mem rec", (r) => [gib(r.mem_rec)]],
-  ["mem_waste_pct", "Mem waste", (r) => [r.mem_waste == null ? "" : `${gib(r.mem_waste)} · ${pct(r.mem_waste_pct)}`, wcls(r.mem_waste_pct)]],
-  ["cpu_req", "CPU req", (r) => [cores(r.cpu_req)]],
-  ["cpu_max", "CPU max", (r) => [cores(r.cpu_max)]],
-  ["cpu_rec", "CPU rec", (r) => [cores(r.cpu_rec)]],
-  ["cpu_waste_pct", "CPU waste", (r) => [r.cpu_waste == null ? "" : `${cores(r.cpu_waste)} · ${pct(r.cpu_waste_pct)}`, wcls(r.cpu_waste_pct)]],
-  ["oom_runs", "OOM", (r) => [r.oom_runs || "", r.oom_runs ? "w80" : ""]],
-  ["mem_avg", "Mem avg", (r) => [gib(r.mem_avg)]],
-  ["cpu_avg", "CPU avg", (r) => [cores(r.cpu_avg)]],
-  ["notes", "Заметки", (r) => [esc((r.notes || []).join(" · ")), "notes"], 1],
+  W("workload", "Задача", (r) => esc(r.workload), {l: 1, cls: "w", csv: (r) => r.workload}),
+  W("dag_id", "DAG", (r) => esc(r.dag_id), {l: 1, label: 1}),
+  W("task_id", "Task", (r) => esc(r.task_id), {l: 1, label: 1}),
+  W("status", "Статус", (r) => badge(r.status), {l: 1, csv: (r) => (STATUS[r.status] || [, , r.status])[2]}),
+  W("runs", "Запусков", (r) => r.runs),
+  W("runtime_h", "Время", (r) => hours(r.runtime_h), {csv: (r) => r.runtime_h}),
+  W("mem_idle_gh", "Простой памяти, GiB·ч", (r) => fmt(r.mem_idle_gh, 0), {csv: (r) => r.mem_idle_gh}),
+  W("mem_req", "Mem request", (r) => gib(r.mem_req), {csv: (r) => r.mem_req}),
+  W("mem_max", "Mem пик", (r) => gib(r.mem_max), {csv: (r) => r.mem_max}),
+  W("mem_rec", "Mem рекоменд.", (r) => `<b>${gib(r.mem_rec)}</b>`, {csv: (r) => r.mem_rec}),
+  W("mem_waste_pct", "Mem не исп.", (r) => r.mem_waste_pct == null ? "" : `<span class="chip ${sevCls(r.mem_waste_pct)}">${pct(r.mem_waste_pct)}</span>`, {csv: (r) => r.mem_waste_pct}),
+  W("cpu_req", "CPU request", (r) => cores(r.cpu_req), {csv: (r) => r.cpu_req}),
+  W("cpu_max", "CPU пик", (r) => cores(r.cpu_max), {csv: (r) => r.cpu_max}),
+  W("cpu_rec", "CPU рекоменд.", (r) => `<b>${cores(r.cpu_rec)}</b>`, {csv: (r) => r.cpu_rec}),
+  W("cpu_waste_pct", "CPU не исп.", (r) => r.cpu_waste_pct == null ? "" : `<span class="chip ${sevCls(r.cpu_waste_pct)}">${pct(r.cpu_waste_pct)}</span>`, {csv: (r) => r.cpu_waste_pct}),
+  W("cpu_idle_ch", "Простой CPU, core·ч", (r) => fmt(r.cpu_idle_ch, 0), {csv: (r) => r.cpu_idle_ch}),
+  W("oom_runs", "OOM", (r) => r.oom_runs ? `<span class="chip c80">${r.oom_runs}</span>` : ""),
+  W("notes", "Заметки", (r) => esc(notesFor(r).map((n) => n[1]).join(" · ")), {l: 1, cls: "notes", csv: (r) => notesFor(r).map((n) => n[1]).join("; ")}),
 ];
 const RUN_COLS = [
-  ["workload", "Workload", (r) => [esc(r.w.workload)], 1],
-  ["dag_id", "DAG", (r) => [esc(r.w.dag_id)], 1],
-  ["run_id", "Run ID", (r) => [esc(r.run_id)], 1],
-  ["try", "Try", (r) => [esc(r.try)]],
-  ["pod", "Pod", (r) => [esc(r.pod)], 1],
-  ["start", "Старт", (r) => [dt(r.start)]],
-  ["duration_h", "Длит.", (r) => [hours(r.duration_h)]],
-  ["cpu_req", "CPU req", (r) => [cores(r.cpu_req)]],
-  ["cpu_avg", "CPU avg", (r) => [cores(r.cpu_avg)]],
-  ["cpu_max", "CPU max", (r) => [cores(r.cpu_max)]],
-  ["cpu_over_pct", "CPU сверх", (r) => [r.cpu_over == null ? "" : `${cores(r.cpu_over)} · ${pct(r.cpu_over_pct)}`, r.cpu_over < 0 ? "neg" : wcls(r.cpu_over_pct)]],
-  ["mem_req", "Mem req", (r) => [gib(r.mem_req)]],
-  ["mem_lim", "Mem limit", (r) => [gib(r.mem_lim)]],
-  ["mem_avg", "Mem avg", (r) => [gib(r.mem_avg)]],
-  ["mem_max", "Mem max", (r) => [gib(r.mem_max)]],
-  ["mem_over_pct", "Mem сверх", (r) => [r.mem_over == null ? "" : `${gib(r.mem_over)} · ${pct(r.mem_over_pct)}`, r.mem_over < 0 ? "neg" : wcls(r.mem_over_pct)]],
-  ["cpu_idle_ch", "Простой CPU", (r) => [num(r.cpu_idle_ch, 2)]],
-  ["mem_idle_gh", "Простой Mem", (r) => [num(r.mem_idle_gh, 1)]],
-  ["oom", "OOM", (r) => [r.oom ? "OOM" : "", r.oom ? "w80" : ""]],
+  W("workload", "Задача", (r) => esc(r.w.workload), {l: 1, cls: "w", csv: (r) => r.w.workload}),
+  W("dag_id", "DAG", (r) => esc(r.w.dag_id), {l: 1, label: 1, csv: (r) => r.w.dag_id}),
+  W("run_id", "Run ID", (r) => esc(r.run_id), {l: 1, label: 1}),
+  W("try", "Try", (r) => esc(r.try), {label: 1}),
+  W("pod", "Pod", (r) => `<span class="muted">${esc(r.pod)}</span>`, {l: 1, csv: (r) => r.pod}),
+  W("start", "Старт", (r) => dt(r.start), {csv: (r) => new Date(r.start * 1000).toISOString()}),
+  W("duration_h", "Длительность", (r) => hours(r.duration_h), {csv: (r) => r.duration_h}),
+  W("mem_req", "Mem request", (r) => gib(r.mem_req), {csv: (r) => r.mem_req}),
+  W("mem_max", "Mem пик", (r) => gib(r.mem_max), {csv: (r) => r.mem_max}),
+  W("mem_avg", "Mem сред.", (r) => gib(r.mem_avg), {csv: (r) => r.mem_avg}),
+  W("mem_over_pct", "Mem сверх пика", (r) => r.mem_over == null ? "" : `<span class="chip ${r.mem_over < 0 ? "cneg" : sevCls(r.mem_over_pct)}">${gib(r.mem_over)} · ${pct(r.mem_over_pct)}</span>`, {csv: (r) => r.mem_over}),
+  W("cpu_req", "CPU request", (r) => cores(r.cpu_req), {csv: (r) => r.cpu_req}),
+  W("cpu_max", "CPU пик", (r) => cores(r.cpu_max), {csv: (r) => r.cpu_max}),
+  W("cpu_avg", "CPU сред.", (r) => cores(r.cpu_avg), {csv: (r) => r.cpu_avg}),
+  W("cpu_over_pct", "CPU сверх пика", (r) => r.cpu_over == null ? "" : `<span class="chip ${r.cpu_over < 0 ? "cneg" : sevCls(r.cpu_over_pct)}">${cores(r.cpu_over)} · ${pct(r.cpu_over_pct)}</span>`, {csv: (r) => r.cpu_over}),
+  W("mem_idle_gh", "Простой памяти, GiB·ч", (r) => fmt(r.mem_idle_gh, 1), {csv: (r) => r.mem_idle_gh}),
+  W("oom", "OOM", (r) => r.oom ? `<span class="chip c80">OOM</span>` : "", {csv: (r) => r.oom ? "OOM" : ""}),
 ];
+
+function visibleCols(cols) {
+  const has = {
+    dag_id: report.workloads.some((w) => w.dag_id), task_id: report.workloads.some((w) => w.task_id),
+    run_id: report.runs.some((r) => r.run_id), try: report.runs.some((r) => r.try),
+  };
+  return cols.filter((c) => !c.label || has[c.k]);
+}
 
 function sortRows(rows, key, asc, get) {
   const k = (r) => { const v = get(r, key); return v == null || v === "" ? null : v; };
@@ -216,122 +429,240 @@ function sortRows(rows, key, asc, get) {
     if (x === y) return 0;
     if (x === null) return 1;
     if (y === null) return -1;
-    const c = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y));
+    const c = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), "ru");
     return asc ? c : -c;
   });
 }
 
-// DAG/Task/Run ID columns are hidden when kube-state-metrics has no Airflow labels
-const LABEL_COLS = ["dag_id", "task_id", "run_id", "try"];
-function visibleCols(cols) {
-  if (!report) return cols;
-  const has = {
-    dag_id: report.workloads.some((w) => w.dag_id), task_id: report.workloads.some((w) => w.task_id),
-    run_id: report.runs.some((r) => r.run_id), try: report.runs.some((r) => r.try),
-  };
-  return cols.filter(([k]) => !LABEL_COLS.includes(k) || has[k]);
-}
-
 function renderTable(el, cols, rows, s, onSort, rowAttr) {
   cols = visibleCols(cols);
-  el.querySelector("thead").innerHTML = "<tr>" + cols.map(([k, t, , l]) =>
-    `<th data-k="${k}" class="${l ? "l" : ""} ${s.sort === k ? "sorted" + (s.asc ? " asc" : "") : ""}">${t}</th>`).join("") + "</tr>";
-  el.querySelectorAll("th").forEach((th) => th.onclick = () => {
+  $("thead", el).innerHTML = "<tr>" + cols.map((c) =>
+    `<th data-k="${c.k}" class="${c.l ? "l" : ""} ${s.sort === c.k ? "sorted" + (s.asc ? " asc" : "") : ""}">${c.t}</th>`).join("") + "</tr>";
+  $$("th", el).forEach((th) => th.onclick = () => {
     const k = th.dataset.k;
     if (s.sort === k) s.asc = !s.asc; else { s.sort = k; s.asc = false; }
     onSort();
   });
-  el.querySelector("tbody").innerHTML = rows.map((r) => `<tr ${rowAttr ? rowAttr(r) : ""}>` + cols.map(([, , f, l]) => {
-    const [h, c] = f(r);
-    return `<td class="${l ? "l " : ""}${c || ""}"${c === "notes" ? ` title="${h}"` : ""}>${h}</td>`;
-  }).join("") + "</tr>").join("") || `<tr><td class="empty" colspan="${cols.length}">Нет данных</td></tr>`;
+  $("tbody", el).innerHTML = rows.map((r) => `<tr ${rowAttr ? rowAttr(r) : ""}>` + cols.map((c) => {
+    const h = c.f(r);
+    const title = c.cls === "notes" || c.cls === "w" ? ` title="${esc(String(h).replace(/<[^>]+>/g, ""))}"` : "";
+    return `<td class="${c.l ? "l" : "r"} ${c.cls || ""}"${title}>${h}</td>`;
+  }).join("") + "</tr>").join("") || `<tr><td class="empty" colspan="${cols.length}">Ничего не найдено</td></tr>`;
+}
+
+function filteredWorkloads() {
+  const s = st.wl, q = s.q.toLowerCase();
+  const rows = report.workloads.filter((w) =>
+    (s.f === "all" || (s.f === "issues" && w.status !== "ok") ||
+     (s.f === "over" && (w.status === "over" || w.status === "risky+waste")) ||
+     (s.f === "under" && (w.status === "under" || w.status === "risky+waste" || w.oom_runs))) &&
+    (!q || `${w.workload} ${w.dag_id} ${w.task_id} ${w.namespace} ${w.container}`.toLowerCase().includes(q)));
+  return sortRows(rows, s.sort, s.asc, (r, k) => r[k]);
+}
+function filteredRuns() {
+  const s = st.runs, q = s.q.toLowerCase();
+  const rows = report.runs.filter((r) => (s.wid === null || r.wid === s.wid) && (!s.oom || r.oom) &&
+    (!q || `${r.pod} ${r.run_id} ${r.w.workload} ${r.w.dag_id} ${r.w.task_id}`.toLowerCase().includes(q)));
+  return sortRows(rows, s.sort, s.asc, (r, k) => k in r ? r[k] : r.w[k]);
 }
 
 function renderWorkloads() {
-  const s = st.wl, q = s.q.toLowerCase();
-  let rows = report.workloads.filter((w) =>
-    (s.f === "all" || (s.f === "issues" && w.status !== "ok") ||
-     (s.f === "over" && (w.status === "over" || w.status === "risky+waste")) ||
-     (s.f === "under" && (w.status === "under" || w.status === "risky+waste"))) &&
-    (!q || `${w.workload} ${w.dag_id} ${w.task_id} ${w.namespace} ${w.container}`.toLowerCase().includes(q)));
-  rows = sortRows(rows, s.sort, s.asc, (r, k) => r[k]);
+  const rows = filteredWorkloads();
   $("#wl-count").textContent = `${rows.length} из ${report.workloads.length}`;
-  renderTable($("#wl-table"), WL_COLS, rows, s, renderWorkloads, (r) => `class="click" data-wid="${r.id}" title="Показать запуски"`);
-  $("#wl-table tbody").querySelectorAll("tr[data-wid]").forEach((tr) => tr.onclick = () => openRuns(+tr.dataset.wid));
+  renderTable($("#wl-table"), WL_COLS, rows, st.wl, renderWorkloads, (r) => `class="click" data-wid="${r.id}"`);
+  $$("#wl-table tbody tr[data-wid]").forEach((tr) => tr.onclick = () => openRuns(+tr.dataset.wid));
 }
 
 function renderRuns() {
-  const s = st.runs, q = s.q.toLowerCase();
-  let rows = report.runs.filter((r) => (s.wid === null || r.wid === s.wid) && (!s.oom || r.oom) &&
-    (!q || `${r.pod} ${r.run_id} ${r.w.workload} ${r.w.dag_id} ${r.w.task_id}`.toLowerCase().includes(q)));
-  rows = sortRows(rows, s.sort, s.asc, (r, k) => k in r ? r[k] : r.w[k]);
-  $("#run-count").textContent = `${Math.min(rows.length, s.limit)} из ${rows.length}`;
+  const s = st.runs, rows = filteredRuns();
+  $("#run-count").textContent = rows.length > s.limit ? `${s.limit} из ${rows.length}` : `${rows.length}`;
   $("#run-more").hidden = rows.length <= s.limit;
   renderTable($("#run-table"), RUN_COLS, rows.slice(0, s.limit), s, renderRuns);
   $("#run-clear").hidden = s.wid === null;
-  const w = s.wid === null ? null : wlById.get(s.wid);
-  $("#run-detail").innerHTML = !w ? "" : `<div class="detail">
-    <h3>${esc(w.workload)} <span class="meta">${esc(w.namespace)} / ${esc(w.container)}</span></h3>
-    <div class="meta">${w.dag_id ? "DAG " + esc(w.dag_id) + " · task " + esc(w.task_id) + " · " : ""}${w.runs} запусков,
-      суммарно ${hours(w.runtime_h)}${w.request_changed ? " · <b>request менялся за период</b>" : ""}</div>
-    <div style="margin-top:6px">Сейчас: CPU <b>${cores(w.cpu_req)}</b>, память <b>${gib(w.mem_req)}</b> →
-      рекомендация: CPU <b>${cores(w.cpu_rec)}</b>, память <b>${gib(w.mem_rec)}</b>
-      (пик ${cores(w.cpu_max)} / ${gib(w.mem_max)})</div>
-    ${(w.notes || []).length ? "<ul>" + w.notes.map((n) => `<li>${esc(n)}</li>`).join("") + "</ul>" : ""}</div>`;
+  $("#run-all-btn").classList.toggle("active", !s.oom);
+  $("#run-oom-btn").classList.toggle("active", s.oom);
+  renderDetail(s.wid === null ? null : wlById.get(s.wid));
+}
+
+// ── Detail card with charts ─────────────────────────────
+function renderDetail(w) {
+  const el = $("#run-detail");
+  if (!w) { el.innerHTML = ""; return; }
+  const runs = report.runs.filter((r) => r.wid === w.id).sort((a, b) => a.start - b.start);
+  const notes = notesFor(w);
+  const memSave = w.mem_req != null && w.mem_rec != null ? w.mem_req - w.mem_rec : null;
+  const cpuSave = w.cpu_req != null && w.cpu_rec != null ? w.cpu_req - w.cpu_rec : null;
+  const saveTxt = (v, f) => v == null ? "" : v > 0 ? `<span class="save">−${f(v)} на каждый запуск</span>` : `<span class="muted">нужно больше на ${f(-v)}</span>`;
+  const yaml = [
+    `resources:`,
+    `  requests:`,
+    w.cpu_rec != null ? `    cpu: ${k8sCpu(w.cpu_rec)}` : null,
+    w.mem_rec != null ? `    memory: ${k8sMem(w.mem_rec)}` : null,
+    w.mem_rec_lim != null ? `  limits:` : null,
+    w.mem_rec_lim != null ? `    memory: ${k8sMem(w.mem_rec_lim)}` : null,
+    `# пик за ${report.lookback_days} дн.: cpu ${cores(w.cpu_max)}, memory ${gib(w.mem_max)}; запас +${Math.round(report.request_buffer * 100)}%`,
+  ].filter(Boolean).join("\n");
+  const ncls = {crit: "color:var(--crit)", warn: "color:var(--warn)", over: "color:var(--serious)", info: "color:var(--muted)"};
+  const nico = {crit: "i-warn", warn: "i-warn", over: "i-down-arrow", info: "i-info"};
+  el.innerHTML = `<div class="card detail">
+    <div class="d-head">
+      <button class="btn ghost" id="d-back" title="Ко всем задачам">${icon("i-back")}</button>
+      <h3>${esc(w.workload)}</h3>${badge(w.status)}
+    </div>
+    <div class="d-meta">${esc(w.namespace)} · контейнер ${esc(w.container)}${w.dag_id ? ` · DAG ${esc(w.dag_id)} · task ${esc(w.task_id)}` : ""}
+      · ${w.runs} запусков, суммарно ${hours(w.runtime_h)} · простой ${fmt(w.mem_idle_gh, 0)} GiB·ч памяти, ${fmt(w.cpu_idle_ch, 0)} core·ч CPU</div>
+    <div class="d-grid">
+      <div class="res"><div class="k">Память · request → рекомендация</div>
+        <div class="now"><span>${gib(w.mem_req)}</span><span class="arrow">→</span><span class="rec">${gib(w.mem_rec)}</span></div>
+        <div class="s">пик ${gib(w.mem_max)}, в среднем ${gib(w.mem_avg)}</div><div class="s">${saveTxt(memSave, gib)}</div></div>
+      <div class="res"><div class="k">CPU · request → рекомендация</div>
+        <div class="now"><span>${cores(w.cpu_req)}</span><span class="arrow">→</span><span class="rec">${cores(w.cpu_rec)}</span></div>
+        <div class="s">пик ${cores(w.cpu_max)}, в среднем ${cores(w.cpu_avg)}</div><div class="s">${saveTxt(cpuSave, cores)}</div></div>
+      <div class="yaml"><button class="btn" id="d-copy">${icon("i-copy")}Копировать</button><pre id="d-yaml">${esc(yaml)}</pre></div>
+    </div>
+    ${notes.length ? `<ul class="notes-list">${notes.map(([k, t]) => `<li><svg style="${ncls[k]}"><use href="#${nico[k]}"/></svg>${esc(t)}</li>`).join("")}</ul>` : ""}
+    <div class="charts">
+      <div class="chart"><h4>Память по запускам</h4><div class="sub">пик каждого запуска, GiB</div><svg id="ch-mem"></svg></div>
+      <div class="chart"><h4>CPU по запускам</h4><div class="sub">пик каждого запуска, ядер</div><svg id="ch-cpu"></svg></div>
+    </div></div>`;
+  $("#d-back").onclick = () => { st.runs.wid = null; showTab("wl"); };
+  $("#d-copy").onclick = async (e) => {
+    const b = e.currentTarget;
+    try { await navigator.clipboard.writeText(yaml); } catch (_) {
+      const r = document.createRange(); r.selectNodeContents($("#d-yaml"));
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); document.execCommand("copy"); sel.removeAllRanges();
+    }
+    b.innerHTML = icon("i-ok") + "Скопировано"; setTimeout(() => b.innerHTML = icon("i-copy") + "Копировать", 1500);
+  };
+  runChart($("#ch-mem"), runs, (r) => r.mem_max, w.mem_req, w.mem_rec, gib);
+  runChart($("#ch-cpu"), runs, (r) => r.cpu_max, w.cpu_req, w.cpu_rec, cores);
+}
+
+function niceMax(v) {
+  if (!(v > 0)) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(v))), m = v / p;
+  return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * p;
+}
+
+// Bars = peak per run (chronological); dashed = current request; green = recommendation
+function runChart(svg, runs, get, req, rec, f) {
+  const W = svg.clientWidth || 500, H = 170, L = 46, R = 8, T = 14, B = 22;
+  const vals = runs.map(get);
+  const top = niceMax(Math.max(req || 0, rec || 0, ...vals.filter((v) => v != null)));
+  const y = (v) => T + (H - T - B) * (1 - v / top);
+  const n = Math.max(runs.length, 1), slot = (W - L - R) / n, bw = Math.max(2, Math.min(28, slot - 2));
+  let h = `<g class="grid">`;
+  for (let i = 0; i <= 4; i++) { const v = top * i / 4; h += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/>`; }
+  h += `</g><g class="axis">`;
+  for (let i = 0; i <= 4; i += 2) { const v = top * i / 4; h += `<text x="${L - 6}" y="${y(v) + 3.5}" text-anchor="end">${v ? f(v) : "0"}</text>`; }
+  const ticks = Math.min(n, Math.max(2, Math.floor((W - L - R) / 90)));
+  for (let i = 0; i < ticks && runs.length; i++) {
+    const idx = Math.round(i * (n - 1) / Math.max(1, ticks - 1)), x = L + slot * idx + slot / 2;
+    h += `<text x="${x}" y="${H - 5}" text-anchor="middle">${new Date(runs[idx].start * 1000).toLocaleDateString("ru-RU", {day: "2-digit", month: "2-digit"})}</text>`;
+  }
+  h += `</g>`;
+  runs.forEach((r, i) => {
+    const v = vals[i]; if (v == null) return;
+    const x = L + slot * i + (slot - bw) / 2, yy = y(v), hh = Math.max(1.5, H - B - yy), rad = Math.min(4, bw / 2, hh);
+    h += `<path class="bar" data-i="${i}" d="M${x},${H - B} V${yy + rad} Q${x},${yy} ${x + rad},${yy} H${x + bw - rad} Q${x + bw},${yy} ${x + bw},${yy + rad} V${H - B} Z"/>`;
+    h += `<rect data-i="${i}" x="${L + slot * i}" y="${T}" width="${slot}" height="${H - T - B}" fill="transparent"/>`;
+  });
+  if (req != null) h += `<line class="ref" x1="${L}" x2="${W - R}" y1="${y(req)}" y2="${y(req)}"/><text class="reflab" x="${W - R}" y="${y(req) - 4}" text-anchor="end">request ${f(req)}</text>`;
+  if (rec != null) h += `<line class="recl" x1="${L}" x2="${W - R}" y1="${y(rec)}" y2="${y(rec)}"/><text class="reclab" x="${L + 4}" y="${y(rec) - 4}">рекомендация ${f(rec)}</text>`;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = h;
+  const tip = $("#tip");
+  $$("[data-i]", svg).forEach((el) => {
+    el.onmousemove = (e) => {
+      const r = runs[+el.dataset.i];
+      $$(".bar", svg).forEach((b) => b.classList.toggle("hot", b.dataset.i === el.dataset.i));
+      tip.innerHTML = `<b>${dtFull(r.start)}</b> · ${hours(r.duration_h)}${r.oom ? " · <b style='color:var(--crit)'>OOM</b>" : ""}<br>
+        пик <b>${f(get(r))}</b>${req != null ? ` из request ${f(req)}` : ""}<br><span class="muted">${esc(r.run_id || r.pod)}</span>`;
+      tip.style.display = "block";
+      const tw = tip.offsetWidth, th = tip.offsetHeight;
+      tip.style.left = Math.min(innerWidth - tw - 8, e.clientX + 14) + "px";
+      tip.style.top = Math.max(8, e.clientY - th - 10) + "px";
+    };
+    el.onmouseleave = () => { tip.style.display = "none"; $$(".bar", svg).forEach((b) => b.classList.remove("hot")); };
+  });
+}
+
+// ── Summary ─────────────────────────────────────────────
+function renderSummary() {
+  const s = report.summary, share = (a, b) => b ? Math.round(a / b * 100) + "%" : "—";
+  const kpi = (l, v, unit, sub, ic) => `<div class="card kpi"><div class="l">${ic ? `<svg class="ico" style="color:${ic[1]}"><use href="#${ic[0]}"/></svg>` : ""}${l}</div>
+    <div class="v num">${v}${unit ? `<small>${unit}</small>` : ""}</div><div class="s">${sub}</div></div>`;
+  $("#kpis").innerHTML =
+    kpi("Задачи с перерасходом", s.over, `из ${s.workloads}`, `больше ${Math.round(report.waste_threshold * 100)}% request не используется`, ["i-down-arrow", "var(--serious)"]) +
+    kpi("Нехватка ресурсов", s.under, "", `OOMKilled запусков: ${s.oom_runs}`, s.under || s.oom_runs ? ["i-warn", "var(--crit)"] : ["i-ok", "var(--good)"]) +
+    kpi("Простой памяти", big(s.mem_idle_gh), "GiB·ч", `${share(s.mem_idle_gh, s.mem_req_gh)} зарезервированного не использовано`) +
+    kpi("Запусков за период", big(s.runs), "", `${report.lookback_days} дн. · ${s.workloads} задач`);
+  $("#ov-sub").textContent = `Сумма request × время работы всех ${big(s.runs)} запусков за ${report.lookback_days} дн.`;
+  const split = (title, req, used, idle, unit) => {
+    const u = req ? Math.min(100, used / req * 100) : 0, i = req ? Math.max(0, 100 - u) : 0;
+    return `<div class="split"><div class="row"><b>${title}</b><span class="num">${big(used)} из ${big(req)} ${unit} · простой <b>${share(idle, req)}</b></span></div>
+      <div class="bar2">${u > 0 ? `<div class="u" style="width:${u}%" title="Использовано: ${big(used)} ${unit}"></div>` : ""}${i > 0 ? `<div class="i" style="width:${i}%" title="Простой: ${big(idle)} ${unit}"></div>` : ""}</div></div>`;
+  };
+  $("#splits").innerHTML = split("Память", s.mem_req_gh, s.mem_used_gh, s.mem_idle_gh, "GiB·ч") +
+    split("CPU", s.cpu_req_ch, s.cpu_used_ch, s.cpu_idle_ch, "core·ч") +
+    `<div class="split"><div class="row"><b>Waste по пику</b><span class="num">${big(s.mem_waste_gib)} GiB памяти · ${fmt(s.cpu_waste_cores, 1)} ядер CPU</span></div>
+     <div class="muted" style="font-size:12px">сумма (request − пик) по задачам с перерасходом — столько можно снять с request, не урезая пики</div></div>`;
+  const top = report.workloads.filter((w) => w.mem_idle_gh > 0).sort((a, b) => b.mem_idle_gh - a.mem_idle_gh).slice(0, 10);
+  const mx = top.length ? top[0].mem_idle_gh : 1;
+  $("#top-idle").innerHTML = top.map((w) => `<div class="hb" data-wid="${w.id}" title="${esc(w.workload)}">
+      <div class="n">${esc(w.workload)}</div><div class="t"><div style="width:${w.mem_idle_gh / mx * 100}%"></div></div>
+      <div class="v num">${big(w.mem_idle_gh)}</div></div>`).join("") || `<div class="empty">Простоя нет</div>`;
+  $$("#top-idle .hb").forEach((el) => el.onclick = () => openRuns(+el.dataset.wid));
+  const c = clusters.find((x) => x.id === cid);
+  $("#meta").textContent = `${(report.namespaces.join(", ") || "все неймспейсы")} · ${report.lookback_days} дн. · отчёт ${dtFull(report.generated_at)}`;
+  $("#meta").title = c ? c.url : "";
+  $("#c-wl").textContent = report.workloads.filter((w) => w.status !== "ok").length;
+  $("#c-runs").textContent = report.runs.length;
 }
 
 function openRuns(wid) {
-  Object.assign(st.runs, {wid, q: "", limit: 300});
+  Object.assign(st.runs, {wid, q: "", limit: 300, oom: false});
   $("#run-q").value = "";
   showTab("runs");
+  const top = $("#run-detail").getBoundingClientRect().top + scrollY - $(".top").offsetHeight - 12;
+  scrollTo({top, behavior: "smooth"});
 }
 
 function showTab(t) {
-  document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === t));
+  st.tab = t;
+  $$(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === t));
   $("#tab-wl").hidden = t !== "wl";
   $("#tab-runs").hidden = t !== "runs";
   if (report) (t === "wl" ? renderWorkloads : renderRuns)();
 }
 
-function renderSummary() {
-  const s = report.summary;
-  const share = (a, b) => b ? Math.round(a / b * 100) + "%" : "—";
-  const tiles = [
-    ["Задач с перерасходом", s.over, `из ${s.workloads} · порог ${Math.round(report.waste_threshold * 100)}%`],
-    ["Нехватка ресурсов", s.under, `OOMKilled запусков: ${s.oom_runs}`],
-    ["Запусков за период", num(s.runs, 0), `${report.lookback_days} дн.`],
-    ["Простой памяти", num(s.mem_idle_gh, 0) + " GiB·ч", `${share(s.mem_idle_gh, s.mem_req_gh)} от запрошенных ${num(s.mem_req_gh, 0)}`],
-    ["Простой CPU", num(s.cpu_idle_ch, 0) + " core·ч", `${share(s.cpu_idle_ch, s.cpu_req_ch)} от запрошенных ${num(s.cpu_req_ch, 0)}`],
-    ["Waste памяти (request − пик)", num(s.mem_waste_gib, 0) + " GiB", `CPU: ${num(s.cpu_waste_cores, 1)} ядер`],
-  ];
-  $("#tiles").innerHTML = tiles.map(([l, v, sub]) => `<div class="tile"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`).join("");
-  $("#meta").textContent = `${report.namespaces.join(", ") || "все неймспейсы"} · отчёт от ${dtFull(report.generated_at)} · за ${report.lookback_days} дн.`;
-  $("#buf").textContent = (1 + report.request_buffer).toFixed(1);
-}
-
 function renderStatus(s) {
   $("#refresh").disabled = s.running;
-  $("#state").textContent = s.running ? "⏳ идёт анализ…" : s.next_run ? `следующий: ${dtFull(s.next_run)}` : "";
+  const dot = $("#state .dot"), txt = $("#state span:last-child");
+  dot.className = "dot" + (s.running ? " run" : s.last_error ? " err" : "");
+  txt.textContent = s.running ? (s.queued ? "в очереди…" : "идёт анализ…") : s.last_error ? "ошибка анализа" :
+    s.next_run ? "след. анализ " + dt(s.next_run) : "";
   const n = [];
-  if (s.last_error) n.push(`<div class="notice err">Последний запуск анализа завершился ошибкой (показан предыдущий отчёт):\n${esc(s.last_error)}</div>`);
-  if (!report) n.push(`<div class="notice">${s.running ? "Идёт первый анализ, это займёт несколько минут…" : "Отчёта ещё нет. Нажмите «Обновить»."}</div>`);
+  if (s.last_error) n.push(`<div class="notice err">${icon("i-warn")}<div><b>Последний анализ завершился ошибкой</b>${report ? " — показан предыдущий отчёт" : ""}<pre>${esc(s.last_error)}</pre></div></div>`);
+  if (!report) n.push(`<div class="notice">${icon("i-info")}<div>${s.running ? "Идёт первый анализ — обычно это несколько минут. Страница обновится сама." : "Отчёта ещё нет. Нажмите «Обновить»."}</div></div>`);
   $("#notices").innerHTML = n.join("");
   $("#xlsx").hidden = !report;
 }
 
 let wasRunning = false;
 async function load() {
-  const r = await fetch(api("api/report"), {cache: "no-store"});
-  const data = await r.json();
+  const data = await (await fetch(api("api/report"), {cache: "no-store"})).json();
   report = data.report;
   $("#xlsx").href = api("report.xlsx");
   $("#content").hidden = !report;
-  if (!report) $("#meta").textContent = (clusters.find((c) => c.id === cid) || {}).url || "";
   if (report) {
     wlById = new Map(report.workloads.map((w) => [w.id, w]));
     report.runs.forEach((r) => r.w = wlById.get(r.wid));
     renderSummary();
-    showTab($(".tab.active").dataset.tab);
+    showTab(st.tab);
+  } else {
+    const c = clusters.find((x) => x.id === cid);
+    $("#meta").textContent = c ? (c.namespaces.join(", ") || "все неймспейсы") : "";
   }
   renderStatus(data.status);
   wasRunning = data.status.running;
@@ -346,24 +677,19 @@ async function poll() {
   } catch (e) { /* server restarting */ }
 }
 
-$("#refresh").onclick = async () => {
-  $("#refresh").disabled = true;
-  const r = await (await fetch(api("api/refresh"), {method: "POST"})).json();
-  if (!r.started) alert("Анализ не запущен: " + r.reason);
-  poll();
-};
-document.querySelectorAll(".tab").forEach((b) => b.onclick = () => showTab(b.dataset.tab));
-document.querySelectorAll("[data-f]").forEach((b) => b.onclick = () => {
-  document.querySelectorAll("[data-f]").forEach((x) => x.classList.toggle("active", x === b));
-  st.wl.f = b.dataset.f; renderWorkloads();
-});
-$("#wl-q").oninput = (e) => { st.wl.q = e.target.value; renderWorkloads(); };
-$("#run-q").oninput = (e) => { st.runs.q = e.target.value; st.runs.limit = 300; renderRuns(); };
-$("#run-oom").onchange = (e) => { st.runs.oom = e.target.checked; renderRuns(); };
-$("#run-clear").onclick = () => { st.runs.wid = null; renderRuns(); };
-$("#run-more").onclick = () => { st.runs.limit += 500; renderRuns(); };
+function toCsv(cols, rows) {
+  cols = visibleCols(cols);
+  const cell = (v) => { v = v == null ? "" : String(v); return /[";\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
+  const plain = (c, r) => c.csv ? c.csv(r) : String(c.f(r)).replace(/<[^>]+>/g, "");
+  return "﻿" + [cols.map((c) => cell(c.t)).join(";"), ...rows.map((r) => cols.map((c) => cell(plain(c, r))).join(";"))].join("\r\n");
+}
+function download(name, text) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], {type: "text/csv;charset=utf-8"}));
+  a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
 
-// ── Clusters ──────────────────────────────────────────────────────────
+// ── Clusters ────────────────────────────────────────────
 async function loadClusters() {
   const data = await (await fetch("api/clusters", {cache: "no-store"})).json();
   clusters = data.clusters;
@@ -373,7 +699,6 @@ async function loadClusters() {
   $("#cluster").innerHTML = clusters.map((c) =>
     `<option value="${esc(c.id)}">${esc(c.name)}${c.namespaces.length ? " · " + esc(c.namespaces.join(", ")) : ""}</option>`).join("");
   $("#cluster").value = cid;
-  $("#cluster").hidden = clusters.length < 2 && !data.editable;
 }
 
 function selectCluster(id) {
@@ -381,36 +706,38 @@ function selectCluster(id) {
   store.set("cluster", id);
   history.replaceState(null, "", "#cluster=" + encodeURIComponent(id));
   report = null;
-  Object.assign(st.runs, {wid: null, q: "", limit: 300});
+  Object.assign(st.runs, {wid: null, q: "", limit: 300, oom: false});
   $("#run-q").value = "";
-  showTab("wl");
+  st.tab = "wl";
   load();
 }
 
 function clRow(c) {
-  return `<tr><td><input data-k="name" value="${esc(c.name)}" placeholder="prod"></td>
-    <td><input data-k="url" value="${esc(c.url)}" placeholder="http://vmselect/select/0/prometheus"></td>
-    <td><input data-k="namespaces" value="${esc((c.namespaces || []).join(", "))}" placeholder="mpa-airflow-6679"></td>
-    <td><button class="cl-del" title="Удалить">✕</button></td></tr>`;
+  return `<div class="cl-row">
+    <input data-k="name" value="${esc(c.name)}" placeholder="msd-prod">
+    <input data-k="url" value="${esc(c.url)}" placeholder="http://vmselect/select/0/prometheus">
+    <input data-k="namespaces" value="${esc((c.namespaces || []).join(", "))}" placeholder="mpa-airflow-6679">
+    <input data-k="proxy" value="${esc(c.proxy || "")}" placeholder="не нужен">
+    <button class="btn ghost cl-del" title="Удалить">${icon("i-x")}</button></div>`;
 }
-function bindDel() {
-  document.querySelectorAll(".cl-del").forEach((b) => b.onclick = () => b.closest("tr").remove());
-}
+function bindDel() { $$(".cl-del").forEach((b) => b.onclick = () => b.closest(".cl-row").remove()); }
 $("#edit-clusters").onclick = () => {
   $("#cl-rows").innerHTML = clusters.map(clRow).join("");
   bindDel();
   $("#cl-err").textContent = "";
   $("#clusters-panel").hidden = false;
+  scrollTo({top: 0, behavior: "smooth"});
 };
 $("#cl-add").onclick = () => {
-  $("#cl-rows").insertAdjacentHTML("beforeend", clRow({name: "", url: "", namespaces: []}));
+  $("#cl-rows").insertAdjacentHTML("beforeend", clRow({name: "", url: "", namespaces: [], proxy: ""}));
   bindDel();
+  $("#cl-rows .cl-row:last-child input").focus();
 };
 $("#cl-cancel").onclick = () => { $("#clusters-panel").hidden = true; };
 $("#cl-save").onclick = async () => {
-  const items = [...document.querySelectorAll("#cl-rows tr")].map((tr) => {
+  const items = $$("#cl-rows .cl-row").map((row) => {
     const o = {};
-    tr.querySelectorAll("input").forEach((i) => o[i.dataset.k] = i.value.trim());
+    $$("input", row).forEach((i) => o[i.dataset.k] = i.value.trim());
     o.namespaces = o.namespaces.split(",").map((x) => x.trim()).filter(Boolean);
     return o;
   });
@@ -418,12 +745,39 @@ $("#cl-save").onclick = async () => {
   const data = await r.json();
   if (!r.ok) { $("#cl-err").textContent = data.detail || "Ошибка сохранения"; return; }
   $("#clusters-panel").hidden = true;
+  const added = items.length ? items[items.length - 1].name : null;
   await loadClusters();
-  selectCluster(cid);
+  const newOne = clusters.find((c) => c.name === added && !clusters.slice(0, -1).some((x) => x.name === added));
+  selectCluster(newOne && newOne.id !== cid ? newOne.id : cid);
 };
-$("#cluster").onchange = (e) => selectCluster(e.target.value);
 
-loadClusters().then(load).catch((e) => { $("#notices").innerHTML = `<div class="notice err">Не удалось загрузить отчёт: ${esc(e)}</div>`; });
+// ── Wiring ──────────────────────────────────────────────
+$("#refresh").onclick = async () => {
+  $("#refresh").disabled = true;
+  const r = await (await fetch(api("api/refresh"), {method: "POST"})).json();
+  if (!r.started) {
+    const m = r.reason.match(/(\d+) min/);
+    alert(m ? `Анализ запускали недавно. Повторить можно через ${m[1]} мин.` : r.reason === "already running" ? "Анализ уже идёт." : r.reason);
+  }
+  poll();
+};
+$$(".tab").forEach((b) => b.onclick = () => showTab(b.dataset.tab));
+$$("#wl-seg button").forEach((b) => b.onclick = () => {
+  $$("#wl-seg button").forEach((x) => x.classList.toggle("active", x === b));
+  st.wl.f = b.dataset.f; renderWorkloads();
+});
+$("#wl-q").oninput = (e) => { st.wl.q = e.target.value; renderWorkloads(); };
+$("#run-q").oninput = (e) => { st.runs.q = e.target.value; st.runs.limit = 300; renderRuns(); };
+$("#run-all-btn").onclick = () => { st.runs.oom = false; renderRuns(); };
+$("#run-oom-btn").onclick = () => { st.runs.oom = true; renderRuns(); };
+$("#run-clear").onclick = () => { st.runs.wid = null; renderRuns(); };
+$("#run-more").onclick = () => { st.runs.limit += 500; renderRuns(); };
+$("#cluster").onchange = (e) => selectCluster(e.target.value);
+$("#wl-csv").onclick = () => download(`workloads_${cid}.csv`, toCsv(WL_COLS, filteredWorkloads()));
+$("#run-csv").onclick = () => download(`runs_${cid}.csv`, toCsv(RUN_COLS, filteredRuns()));
+addEventListener("resize", () => { if (report && st.tab === "runs" && st.runs.wid !== null) renderDetail(wlById.get(st.runs.wid)); });
+
+loadClusters().then(load).catch((e) => { $("#notices").innerHTML = `<div class="notice err">${icon("i-warn")}<div>Не удалось загрузить отчёт: ${esc(e)}</div></div>`; });
 setInterval(poll, 15000);
 </script>
 </body>

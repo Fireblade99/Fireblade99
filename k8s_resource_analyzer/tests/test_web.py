@@ -28,7 +28,7 @@ def test_report_flow(cfg):
     app = create_app(cfg, start_scheduler=False)
     with TestClient(app) as client:
         assert client.get("/healthz").json() == {"status": "ok"}
-        assert "Kubernetes Resource Waste" in client.get("/").text
+        assert "Resource Waste" in client.get("/").text
 
         empty = client.get("/api/report").json()
         assert empty["report"] is None
@@ -180,3 +180,41 @@ def test_one_analysis_at_a_time(cfg):
         web_app.run_analysis = real
     assert peak[0] == 1
     assert all(r.load() for r in m.refreshers.values())
+
+
+def test_cluster_proxy_and_password_masking(cfg):
+    app = create_app(cfg, start_scheduler=False)
+    m = app.state.manager
+    with TestClient(app) as client:
+        items = [{"name": "dev", "url": "http://vmuser:s3cret@vm-dev/select/0/prometheus",
+                  "namespaces": ["a"], "proxy": "http://proxy.corp:3128"}]
+        data = client.put("/api/clusters", json=items).json()
+        c = data["clusters"][0]
+        assert c["url"] == "http://vmuser:***@vm-dev/select/0/prometheus"
+        assert c["proxy"] == "http://proxy.corp:3128"
+        r = m.get("dev")
+        assert r.cfg.prometheus.url == "http://vmuser:s3cret@vm-dev/select/0/prometheus"
+        assert r.cfg.prometheus.proxy_url == "http://proxy.corp:3128"
+
+        # Saving the masked URL back from the UI keeps the stored password and the report
+        r.run_sync()
+        client.put("/api/clusters", json=[dict(items[0], url=c["url"], proxy="")])
+        r2 = m.get("dev")
+        assert r2 is r and r2.cfg.prometheus.url.endswith("s3cret@vm-dev/select/0/prometheus")
+        assert r2.cfg.prometheus.proxy_url == ""
+        assert client.get("/api/report?cluster=dev").json()["report"]["source"] == c["url"]
+
+        import os
+        import stat
+        assert stat.S_IMODE(os.stat(m.store_path).st_mode) == 0o600
+
+        bad = client.put("/api/clusters", json=[dict(items[0], proxy="proxy:3128")])
+        assert bad.status_code == 422 and "proxy" in bad.json()["detail"]
+
+
+def test_proxy_is_used_by_client():
+    from src.clients.prom_client import PrometheusClient
+
+    c = PrometheusClient("http://x", proxy_url="http://p:3128")
+    assert c._session.proxies == {"http": "http://p:3128", "https": "http://p:3128"}
+

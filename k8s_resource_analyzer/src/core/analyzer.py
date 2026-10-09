@@ -44,6 +44,7 @@ class ResourceAnalyzer:
             chunk_hours=p.chunk_hours,
             pause_seconds=p.pause_seconds,
             use_proxy=p.use_proxy,
+            proxy_url=p.proxy_url,
         )
 
     # ------------------------------------------------------------------

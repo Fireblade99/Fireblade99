@@ -28,6 +28,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response, stat
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
+from ..clients.prom_client import mask_url
 from ..config import ClusterConfig, Config
 from ..pipeline import run_analysis
 from ..reporters import excel_reporter
@@ -121,7 +122,7 @@ class Refresher:
             self.queued = False
             self.last_started = started = time.time()
             try:
-                logger.info("Analysis started: %s %s", self.cfg.prometheus.url, self.cfg.analysis.namespaces)
+                logger.info("Analysis started: %s %s", mask_url(self.cfg.prometheus.url), self.cfg.analysis.namespaces)
                 recs = run_analysis(self.cfg)
                 snap = build_snapshot(recs, self.cfg, started_at=started)
                 tmp_xlsx = self.xlsx_path + ".tmp.xlsx"
@@ -181,6 +182,7 @@ class ClusterManager:
     def _cluster_config(self, c: ClusterConfig) -> Config:
         cfg = copy.deepcopy(self.base)
         cfg.prometheus.url = c.url
+        cfg.prometheus.proxy_url = c.proxy
         cfg.analysis.namespaces = list(c.namespaces)
         cfg.kubernetes.enabled = False  # the web UI works from metrics only
         return cfg
@@ -193,6 +195,7 @@ class ClusterManager:
             cfg = self._cluster_config(c)
             if old is not None and old.cfg.prometheus.url == c.url and \
                     old.cfg.analysis.namespaces == list(c.namespaces):
+                old.cfg.prometheus.proxy_url = c.proxy  # same data, only the route changed
                 new[cid] = old
                 continue
             data_dir = os.path.join(self.data_dir, cid)
@@ -205,10 +208,21 @@ class ClusterManager:
 
     def update(self, items: List[Dict[str, Any]]) -> List[ClusterConfig]:
         clusters = validate_clusters(items)
+        # The UI gets URLs with the password masked; put the stored one back
+        current = {cluster_id(c.name): c for c in self.clusters}
+        for c in clusters:
+            old = current.get(cluster_id(c.name))
+            if old is not None:
+                if c.url == mask_url(old.url):
+                    c.url = old.url
+                if c.proxy == mask_url(old.proxy):
+                    c.proxy = old.proxy
         with self._lock:
             self._apply(clusters)
             tmp = self.store_path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
+            # May contain passwords from URLs: readable by the service user only
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump([c.__dict__ for c in clusters], f, ensure_ascii=False, indent=2)
             os.replace(tmp, self.store_path)
         return clusters
@@ -225,8 +239,8 @@ class ClusterManager:
         out = []
         for c in self.clusters:
             cid = cluster_id(c.name)
-            out.append({"id": cid, "name": c.name, "url": c.url, "namespaces": c.namespaces,
-                        "status": self.refreshers[cid].state()})
+            out.append({"id": cid, "name": c.name, "url": mask_url(c.url), "namespaces": c.namespaces,
+                        "proxy": mask_url(c.proxy), "status": self.refreshers[cid].state()})
         return out
 
     # ── Scheduler ──────────────────────────────────────────────────────
@@ -256,6 +270,7 @@ def validate_clusters(items: List[Dict[str, Any]]) -> List[ClusterConfig]:
             raise HTTPException(status_code=422, detail=f"Cluster #{i}: bad format")
         name = str(it.get("name", "")).strip()
         url = str(it.get("url", "")).strip().rstrip("/")
+        proxy = str(it.get("proxy", "") or "").strip()
         ns = it.get("namespaces", [])
         if isinstance(ns, str):
             ns = ns.split(",")
@@ -268,10 +283,12 @@ def validate_clusters(items: List[Dict[str, Any]]) -> List[ClusterConfig]:
         seen.add(cid)
         if not re.match(r"^https?://[^\s/]+", url):
             raise HTTPException(status_code=422, detail=f"Cluster {name!r}: URL must start with http:// or https://")
+        if proxy and not re.match(r"^https?://[^\s/]+", proxy):
+            raise HTTPException(status_code=422, detail=f"Cluster {name!r}: proxy must look like http://host:port")
         bad = [n for n in ns if not _NS_RE.match(n)]
         if bad:
             raise HTTPException(status_code=422, detail=f"Cluster {name!r}: bad namespace {bad[0]!r}")
-        out.append(ClusterConfig(name=name, url=url, namespaces=ns))
+        out.append(ClusterConfig(name=name, url=url, namespaces=ns, proxy=proxy))
     return out
 
 

@@ -6,6 +6,7 @@ timestamps in unix seconds (the browser formats them in its own time zone).
 import time
 from typing import Any, Dict, List, Optional
 
+from ..clients.prom_client import mask_url
 from ..config import Config
 from ..core.recommender import Recommendation
 from ..core.runs import GIB
@@ -57,12 +58,16 @@ def build_snapshot(
             "cpu_avg": _r(g.avg_cpu_usage),
             "cpu_max": _r(g.max_cpu_usage),
             "cpu_rec": _r(rec.recommended_cpu_request),
+            "cpu_lim": _r(g.cpu_limit),
+            "cpu_rec_lim": _r(rec.recommended_cpu_limit),
             "cpu_waste": _r(_positive(rec.cpu_waste_cores)),
             "cpu_waste_pct": _r(_positive(rec.cpu_waste_ratio)),
             "mem_req": _gib(g.memory_request),
             "mem_avg": _gib(g.avg_memory_usage),
             "mem_max": _gib(g.max_memory_usage),
             "mem_rec": _gib(rec.recommended_memory_request),
+            "mem_lim": _gib(g.memory_limit),
+            "mem_rec_lim": _gib(rec.recommended_memory_limit),
             "mem_waste": _gib(_positive(rec.memory_waste_bytes)),
             "mem_waste_pct": _r(_positive(rec.memory_waste_ratio)),
             "cpu_idle_ch": _r(g.cpu_idle_core_hours, 2),
@@ -120,7 +125,7 @@ def build_snapshot(
         "started_at": int(started_at),
         "lookback_days": config.prometheus.lookback_days,
         "namespaces": list(config.analysis.namespaces or []),
-        "source": config.prometheus.url,
+        "source": mask_url(config.prometheus.url),
         "waste_threshold": config.analysis.waste_threshold_ratio,
         "request_buffer": config.analysis.memory_request_buffer,
         "summary": summary,

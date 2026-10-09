@@ -7,7 +7,7 @@ Every query is a cheap instant ``count`` over the last hour.
 import logging
 from typing import List
 
-from .clients.prom_client import PrometheusClient, ns_selector
+from .clients.prom_client import PrometheusClient, mask_url, ns_selector
 from .config import Config
 
 logger = logging.getLogger(__name__)
@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 def run_check(config: Config) -> int:
     p = config.prometheus
     prom = PrometheusClient(
-        url=p.url, timeout=p.timeout, pause_seconds=0, use_proxy=p.use_proxy, retries=0
+        url=p.url, timeout=p.timeout, pause_seconds=0, use_proxy=p.use_proxy, retries=0,
+        proxy_url=p.proxy_url,
     )
     ns = ns_selector(config.analysis.namespaces or None)
     labels = [v for v in (config.analysis.airflow_labels or {}).values() if v]
@@ -29,9 +30,10 @@ def run_check(config: Config) -> int:
         ("KSM pod labels", f'kube_pod_labels{{pod!=""{ns}}}'),
         ("KSM OOMKilled", f'kube_pod_container_status_last_terminated_reason{{reason="OOMKilled"{ns}}}'),
     ]
-    print(f"Backend   : {p.url}")
+    print(f"Backend   : {mask_url(p.url)}")
     print(f"Namespaces: {', '.join(config.analysis.namespaces) or 'all'}")
-    print(f"Proxy     : {'from environment' if p.use_proxy else 'disabled'}\n")
+    proxy = mask_url(p.proxy_url) if p.proxy_url else ("from environment" if p.use_proxy else "disabled")
+    print(f"Proxy     : {proxy}\n")
 
     ok = True
     for title, selector in checks:

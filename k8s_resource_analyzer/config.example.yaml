@@ -48,9 +48,12 @@ clusters:
   - name: msd-prod
     url: http://victoria-metrics-shortterm.k8s-msd-prod.de.bc/select/0/prometheus
     namespaces: [mpa-airflow-6679]
-  # - name: another-cluster
-  #   url: http://vmselect.other.example/select/0/prometheus
+  # Another environment: basic auth (vmauth) in the URL, proxy only if the VM
+  # is not reachable directly from this host
+  # - name: kz-dev
+  #   url: http://user:password@vmselect.dev.example/select/0/prometheus
   #   namespaces: [airflow, ml-jobs]
+  #   proxy: http://proxy.corp:3128
 
 web:
   data_dir: ./data                 # in the container: /data (volume)

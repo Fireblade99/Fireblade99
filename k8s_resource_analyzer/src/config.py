@@ -15,6 +15,8 @@ class PrometheusConfig:
     timeout: int = 120
     # False: ignore HTTP(S)_PROXY env vars (they usually can't reach the cluster)
     use_proxy: bool = False
+    # Explicit proxy for this backend only, e.g. http://proxy.corp:3128 (wins over use_proxy)
+    proxy_url: str = ""
 
 
 @dataclass
@@ -76,8 +78,11 @@ class ClusterConfig:
     """One analysed cluster: its VictoriaMetrics/Prometheus URL and namespaces."""
 
     name: str = "default"
+    # Basic auth (vmauth) can go into the URL: http://user:password@host/...
     url: str = ""
     namespaces: List[str] = field(default_factory=list)
+    # Only when the backend is reachable through a proxy, e.g. http://proxy.corp:3128
+    proxy: str = ""
 
 
 @dataclass

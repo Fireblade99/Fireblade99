@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -37,6 +38,7 @@ class PrometheusClient:
         pause_seconds: float = 1.0,
         use_proxy: bool = False,
         retries: int = 2,
+        proxy_url: str = "",
     ) -> None:
         self.url = url.rstrip("/")
         self._timeout = timeout
@@ -46,6 +48,8 @@ class PrometheusClient:
         self._session = requests.Session()
         # Corporate HTTP(S)_PROXY usually cannot reach in-cluster hosts
         self._session.trust_env = use_proxy
+        if proxy_url:
+            self._session.proxies = {"http": proxy_url, "https": proxy_url}
         self.requests_made = 0
 
     # ------------------------------------------------------------------
@@ -185,3 +189,12 @@ def ns_selector(namespaces: Optional[List[str]]) -> str:
         return f',namespace="{namespaces[0]}"'
     joined = "|".join(namespaces)
     return f',namespace=~"{joined}"'
+
+
+_USERINFO_RE = re.compile(r"^(\w+://[^:/@\s]+):[^/\s]*@")
+
+
+def mask_url(url: str) -> str:
+    """Hide the password of http://user:password@host URLs (logs, UI)."""
+    return _USERINFO_RE.sub(r"\1:***@", url or "")
+
