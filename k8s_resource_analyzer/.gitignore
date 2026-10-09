@@ -2,3 +2,5 @@ config.yaml
 *.xlsx
 venv/
 .venv/
+data/
+certs/*.crt

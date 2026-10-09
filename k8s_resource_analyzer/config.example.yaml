@@ -41,6 +41,25 @@ output:
   show_only_waste: true
   sort_by: memory_waste
 
+# Web UI: clusters to analyse (switch in the UI; can also be edited there,
+# the edited list is kept in <data_dir>/clusters.json and wins over this one).
+# Without this section the UI uses prometheus.url + analysis.namespaces.
+clusters:
+  - name: msd-prod
+    url: http://victoria-metrics-shortterm.k8s-msd-prod.de.bc/select/0/prometheus
+    namespaces: [mpa-airflow-6679]
+  # - name: another-cluster
+  #   url: http://vmselect.other.example/select/0/prometheus
+  #   namespaces: [airflow, ml-jobs]
+
+web:
+  data_dir: ./data                 # in the container: /data (volume)
+  refresh_interval_hours: 24       # scheduled analysis; the page never queries VM itself
+  min_manual_refresh_minutes: 10   # "Refresh" button rate limit
+  auth_user: ""                    # basic auth; prefer env WEB_USER / WEB_PASSWORD
+  auth_password: ""
+  allow_edit_clusters: true        # false: cluster list only from this file
+
 email:
   enabled: false
   smtp_host: smtp.example.com

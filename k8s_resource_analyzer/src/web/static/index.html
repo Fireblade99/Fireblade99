@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K8s Resource Waste</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085; --line: #e3e6eb;
+  --accent: #1f4e79; --accent-2: #2e75b6; --head: #eef2f7;
+  --red: #fde2e2; --red-t: #a61b1b; --orange: #ffe7cc; --yellow: #fff4c2; --green: #dcf3e2;
+  --risky: #fff2cc; --chip: #eef2f7;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12151b; --panel: #1a1f27; --text: #e6e9ef; --muted: #98a2b3; --line: #2b323d;
+    --accent: #6ea8dc; --accent-2: #4f8fca; --head: #212834;
+    --red: #4a2125; --red-t: #ff9b9b; --orange: #4a3420; --yellow: #45401f; --green: #1f3d2a;
+    --risky: #3f3820; --chip: #262d39;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 14px 24px; display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; }
+header h1 { font-size: 18px; margin: 0; color: var(--accent); }
+.meta { color: var(--muted); font-size: 13px; }
+.spacer { flex: 1; }
+button, .btn { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; border-radius: 6px; cursor: pointer; text-decoration: none; }
+button.primary { background: var(--accent-2); color: #fff; border-color: var(--accent-2); }
+button:disabled { opacity: .55; cursor: default; }
+main { padding: 18px 24px 40px; max-width: 1800px; margin: 0 auto; }
+.notice { padding: 10px 14px; border-radius: 6px; margin-bottom: 14px; background: var(--risky); }
+.notice.err { background: var(--red); color: var(--red-t); white-space: pre-wrap; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+.tile .v { font-size: 22px; font-weight: 600; margin-top: 2px; }
+.tile .l { color: var(--muted); font-size: 12.5px; }
+.tile .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.tab { padding: 8px 14px; border: none; background: none; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.toolbar input[type=search] { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; min-width: 280px; background: var(--panel); color: var(--text); }
+.chip { padding: 5px 10px; border-radius: 14px; background: var(--chip); border: 1px solid transparent; }
+.chip.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.count { color: var(--muted); font-size: 13px; margin-left: auto; }
+.wrap { overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; max-height: calc(100vh - 230px); }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 6px 9px; border-bottom: 1px solid var(--line); white-space: nowrap; text-align: right; }
+th { position: sticky; top: 0; background: var(--head); z-index: 1; cursor: pointer; user-select: none; font-weight: 600; }
+th.l, td.l { text-align: left; }
+th.sorted::after { content: " ▾"; }
+th.sorted.asc::after { content: " ▴"; }
+tbody tr:hover { background: var(--head); }
+tr.click { cursor: pointer; }
+td.notes { max-width: 420px; overflow: hidden; text-overflow: ellipsis; text-align: left; color: var(--muted); }
+.w80 { background: var(--red); } .w60 { background: var(--orange); } .w40 { background: var(--yellow); } .w0 { background: var(--green); }
+.neg { background: var(--risky); }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; }
+.b-over { background: var(--red); color: var(--red-t); } .b-under { background: var(--risky); } .b-both { background: var(--orange); } .b-ok { background: var(--green); }
+.detail { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+.detail h3 { margin: 0 0 6px; font-size: 15px; }
+.detail ul { margin: 6px 0 0 18px; padding: 0; }
+.more { margin: 10px auto; display: block; }
+select, .cl-table input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 16px; }
+.panel h3 { margin: 0 0 4px; font-size: 15px; }
+.cl-table { width: 100%; margin: 10px 0; }
+.cl-table td, .cl-table th { text-align: left; border: none; padding: 4px 6px 4px 0; cursor: default; background: none; position: static; }
+.cl-table input { width: 100%; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.empty { padding: 40px; text-align: center; color: var(--muted); }
+.hint { color: var(--muted); font-size: 12.5px; margin: 6px 0 14px; }
+@media (max-width: 700px) { header, main { padding-left: 12px; padding-right: 12px; } .toolbar input[type=search] { min-width: 0; width: 100%; } }
+</style>
+</head>
+<body>
+<header>
+  <div><h1>Kubernetes Resource Waste</h1><div class="meta" id="meta">загрузка…</div></div>
+  <div class="spacer"></div>
+  <select id="cluster" title="Кластер"></select>
+  <button id="edit-clusters" hidden>Кластеры…</button>
+  <span class="meta" id="state"></span>
+  <button id="refresh" class="primary" title="Запустить анализ сейчас">Обновить</button>
+  <a class="btn" id="xlsx" href="report.xlsx">Скачать Excel</a>
+</header>
+<main>
+  <section class="panel" id="clusters-panel" hidden>
+    <h3>Кластеры</h3>
+    <div class="meta">URL — Prometheus API VictoriaMetrics (…/select/0/prometheus). Неймспейсы через запятую; пусто — все.
+      После изменения URL или неймспейсов отчёт кластера пересчитывается.</div>
+    <table class="cl-table"><thead><tr><th style="width:18%">Имя</th><th style="width:47%">URL</th><th>Неймспейсы</th><th></th></tr></thead>
+      <tbody id="cl-rows"></tbody></table>
+    <div class="row">
+      <button id="cl-add">+ Добавить кластер</button>
+      <span class="spacer"></span>
+      <span class="meta" id="cl-err" style="color:var(--red-t)"></span>
+      <button id="cl-cancel">Отмена</button>
+      <button id="cl-save" class="primary">Сохранить</button>
+    </div>
+  </section>
+  <div id="notices"></div>
+  <div id="content" hidden>
+  <div class="tiles" id="tiles"></div>
+  <div class="hint">
+    <b>Waste</b> = request − пик за неделю. <b>Простой</b> (GiB·ч, core·ч) = (request − среднее) × время работы. Это резерв на нодах, который
+    никто не использовал; учитывает частоту и длительность запусков. <b>Рекомендация</b> = пик × <span id="buf">1.2</span>.
+  </div>
+  <div class="tabs">
+    <button class="tab active" data-tab="wl">Задачи</button>
+    <button class="tab" data-tab="runs">Запуски</button>
+  </div>
+
+  <section id="tab-wl">
+    <div class="toolbar">
+      <input type="search" id="wl-q" placeholder="Поиск: workload, DAG, task…">
+      <button class="chip active" data-f="issues">Проблемные</button>
+      <button class="chip" data-f="over">Перерасход</button>
+      <button class="chip" data-f="under">Нехватка / OOM</button>
+      <button class="chip" data-f="all">Все</button>
+      <span class="count" id="wl-count"></span>
+    </div>
+    <div class="wrap"><table id="wl-table"><thead></thead><tbody></tbody></table></div>
+  </section>
+
+  <section id="tab-runs" hidden>
+    <div id="run-detail"></div>
+    <div class="toolbar">
+      <input type="search" id="run-q" placeholder="Поиск: pod, DAG, run_id…">
+      <button class="chip" id="run-clear" hidden>Все задачи ✕</button>
+      <label class="meta"><input type="checkbox" id="run-oom"> только OOM</label>
+      <span class="count" id="run-count"></span>
+    </div>
+    <div class="wrap"><table id="run-table"><thead></thead><tbody></tbody></table></div>
+    <button class="more" id="run-more" hidden>Показать ещё</button>
+  </section>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const num = (v, d = 1) => v == null ? "" : Number(v).toLocaleString("ru-RU", {maximumFractionDigits: d, minimumFractionDigits: d});
+const cores = (v) => v == null ? "" : (Math.abs(v) < 1 ? Math.round(v * 1000) + "m" : num(v, 2));
+const gib = (v) => v == null ? "" : (Math.abs(v) < 1 ? Math.round(v * 1024) + " Mi" : num(v, 1) + " Gi");
+const pct = (v) => v == null ? "" : Math.round(v * 100) + "%";
+const dt = (ts) => ts ? new Date(ts * 1000).toLocaleString("ru-RU", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"}) : "";
+const dtFull = (ts) => ts ? new Date(ts * 1000).toLocaleString("ru-RU") : "—";
+const hours = (h) => h == null ? "" : (h < 1 ? Math.round(h * 60) + " мин" : num(h, 1) + " ч");
+const wcls = (r) => r == null || r <= 0 ? "" : r >= .8 ? "w80" : r >= .6 ? "w60" : r >= .4 ? "w40" : "w0";
+const STATUS = {
+  "over": ["b-over", "Перерасход"], "under": ["b-under", "Нехватка"],
+  "risky+waste": ["b-both", "Риск + перерасход"], "ok": ["b-ok", "OK"],
+};
+
+let report = null, wlById = new Map(), clusters = [], cid = null;
+const api = (path) => path + (cid ? (path.includes("?") ? "&" : "?") + "cluster=" + encodeURIComponent(cid) : "");
+const store = {get: (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+               set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } }};
+const st = {
+  wl: {q: "", f: "issues", sort: "mem_idle_gh", asc: false},
+  runs: {q: "", wid: null, oom: false, sort: "start", asc: false, limit: 300},
+};
+
+// column: [key, title, render(row) → [html, cls], left?]
+const WL_COLS = [
+  ["workload", "Workload", (r) => [esc(r.workload)], 1],
+  ["dag_id", "DAG", (r) => [esc(r.dag_id)], 1],
+  ["task_id", "Task", (r) => [esc(r.task_id)], 1],
+  ["status", "Статус", (r) => { const s = STATUS[r.status] || ["", r.status]; return [`<span class="badge ${s[0]}">${s[1]}</span>`]; }, 1],
+  ["runs", "Запусков", (r) => [r.runs]],
+  ["runtime_h", "Время", (r) => [hours(r.runtime_h)]],
+  ["mem_idle_gh", "Простой Mem, GiB·ч", (r) => [num(r.mem_idle_gh, 1), r.mem_idle_gh > 0 ? "w40" : ""]],
+  ["cpu_idle_ch", "Простой CPU, core·ч", (r) => [num(r.cpu_idle_ch, 1)]],
+  ["mem_req", "Mem req", (r) => [gib(r.mem_req)]],
+  ["mem_max", "Mem max", (r) => [gib(r.mem_max)]],
+  ["mem_rec", "Mem rec", (r) => [gib(r.mem_rec)]],
+  ["mem_waste_pct", "Mem waste", (r) => [r.mem_waste == null ? "" : `${gib(r.mem_waste)} · ${pct(r.mem_waste_pct)}`, wcls(r.mem_waste_pct)]],
+  ["cpu_req", "CPU req", (r) => [cores(r.cpu_req)]],
+  ["cpu_max", "CPU max", (r) => [cores(r.cpu_max)]],
+  ["cpu_rec", "CPU rec", (r) => [cores(r.cpu_rec)]],
+  ["cpu_waste_pct", "CPU waste", (r) => [r.cpu_waste == null ? "" : `${cores(r.cpu_waste)} · ${pct(r.cpu_waste_pct)}`, wcls(r.cpu_waste_pct)]],
+  ["oom_runs", "OOM", (r) => [r.oom_runs || "", r.oom_runs ? "w80" : ""]],
+  ["mem_avg", "Mem avg", (r) => [gib(r.mem_avg)]],
+  ["cpu_avg", "CPU avg", (r) => [cores(r.cpu_avg)]],
+  ["notes", "Заметки", (r) => [esc((r.notes || []).join(" · ")), "notes"], 1],
+];
+const RUN_COLS = [
+  ["workload", "Workload", (r) => [esc(r.w.workload)], 1],
+  ["dag_id", "DAG", (r) => [esc(r.w.dag_id)], 1],
+  ["run_id", "Run ID", (r) => [esc(r.run_id)], 1],
+  ["try", "Try", (r) => [esc(r.try)]],
+  ["pod", "Pod", (r) => [esc(r.pod)], 1],
+  ["start", "Старт", (r) => [dt(r.start)]],
+  ["duration_h", "Длит.", (r) => [hours(r.duration_h)]],
+  ["cpu_req", "CPU req", (r) => [cores(r.cpu_req)]],
+  ["cpu_avg", "CPU avg", (r) => [cores(r.cpu_avg)]],
+  ["cpu_max", "CPU max", (r) => [cores(r.cpu_max)]],
+  ["cpu_over_pct", "CPU сверх", (r) => [r.cpu_over == null ? "" : `${cores(r.cpu_over)} · ${pct(r.cpu_over_pct)}`, r.cpu_over < 0 ? "neg" : wcls(r.cpu_over_pct)]],
+  ["mem_req", "Mem req", (r) => [gib(r.mem_req)]],
+  ["mem_lim", "Mem limit", (r) => [gib(r.mem_lim)]],
+  ["mem_avg", "Mem avg", (r) => [gib(r.mem_avg)]],
+  ["mem_max", "Mem max", (r) => [gib(r.mem_max)]],
+  ["mem_over_pct", "Mem сверх", (r) => [r.mem_over == null ? "" : `${gib(r.mem_over)} · ${pct(r.mem_over_pct)}`, r.mem_over < 0 ? "neg" : wcls(r.mem_over_pct)]],
+  ["cpu_idle_ch", "Простой CPU", (r) => [num(r.cpu_idle_ch, 2)]],
+  ["mem_idle_gh", "Простой Mem", (r) => [num(r.mem_idle_gh, 1)]],
+  ["oom", "OOM", (r) => [r.oom ? "OOM" : "", r.oom ? "w80" : ""]],
+];
+
+function sortRows(rows, key, asc, get) {
+  const k = (r) => { const v = get(r, key); return v == null || v === "" ? null : v; };
+  return rows.sort((a, b) => {
+    const x = k(a), y = k(b);
+    if (x === y) return 0;
+    if (x === null) return 1;
+    if (y === null) return -1;
+    const c = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y));
+    return asc ? c : -c;
+  });
+}
+
+// DAG/Task/Run ID columns are hidden when kube-state-metrics has no Airflow labels
+const LABEL_COLS = ["dag_id", "task_id", "run_id", "try"];
+function visibleCols(cols) {
+  if (!report) return cols;
+  const has = {
+    dag_id: report.workloads.some((w) => w.dag_id), task_id: report.workloads.some((w) => w.task_id),
+    run_id: report.runs.some((r) => r.run_id), try: report.runs.some((r) => r.try),
+  };
+  return cols.filter(([k]) => !LABEL_COLS.includes(k) || has[k]);
+}
+
+function renderTable(el, cols, rows, s, onSort, rowAttr) {
+  cols = visibleCols(cols);
+  el.querySelector("thead").innerHTML = "<tr>" + cols.map(([k, t, , l]) =>
+    `<th data-k="${k}" class="${l ? "l" : ""} ${s.sort === k ? "sorted" + (s.asc ? " asc" : "") : ""}">${t}</th>`).join("") + "</tr>";
+  el.querySelectorAll("th").forEach((th) => th.onclick = () => {
+    const k = th.dataset.k;
+    if (s.sort === k) s.asc = !s.asc; else { s.sort = k; s.asc = false; }
+    onSort();
+  });
+  el.querySelector("tbody").innerHTML = rows.map((r) => `<tr ${rowAttr ? rowAttr(r) : ""}>` + cols.map(([, , f, l]) => {
+    const [h, c] = f(r);
+    return `<td class="${l ? "l " : ""}${c || ""}"${c === "notes" ? ` title="${h}"` : ""}>${h}</td>`;
+  }).join("") + "</tr>").join("") || `<tr><td class="empty" colspan="${cols.length}">Нет данных</td></tr>`;
+}
+
+function renderWorkloads() {
+  const s = st.wl, q = s.q.toLowerCase();
+  let rows = report.workloads.filter((w) =>
+    (s.f === "all" || (s.f === "issues" && w.status !== "ok") ||
+     (s.f === "over" && (w.status === "over" || w.status === "risky+waste")) ||
+     (s.f === "under" && (w.status === "under" || w.status === "risky+waste"))) &&
+    (!q || `${w.workload} ${w.dag_id} ${w.task_id} ${w.namespace} ${w.container}`.toLowerCase().includes(q)));
+  rows = sortRows(rows, s.sort, s.asc, (r, k) => r[k]);
+  $("#wl-count").textContent = `${rows.length} из ${report.workloads.length}`;
+  renderTable($("#wl-table"), WL_COLS, rows, s, renderWorkloads, (r) => `class="click" data-wid="${r.id}" title="Показать запуски"`);
+  $("#wl-table tbody").querySelectorAll("tr[data-wid]").forEach((tr) => tr.onclick = () => openRuns(+tr.dataset.wid));
+}
+
+function renderRuns() {
+  const s = st.runs, q = s.q.toLowerCase();
+  let rows = report.runs.filter((r) => (s.wid === null || r.wid === s.wid) && (!s.oom || r.oom) &&
+    (!q || `${r.pod} ${r.run_id} ${r.w.workload} ${r.w.dag_id} ${r.w.task_id}`.toLowerCase().includes(q)));
+  rows = sortRows(rows, s.sort, s.asc, (r, k) => k in r ? r[k] : r.w[k]);
+  $("#run-count").textContent = `${Math.min(rows.length, s.limit)} из ${rows.length}`;
+  $("#run-more").hidden = rows.length <= s.limit;
+  renderTable($("#run-table"), RUN_COLS, rows.slice(0, s.limit), s, renderRuns);
+  $("#run-clear").hidden = s.wid === null;
+  const w = s.wid === null ? null : wlById.get(s.wid);
+  $("#run-detail").innerHTML = !w ? "" : `<div class="detail">
+    <h3>${esc(w.workload)} <span class="meta">${esc(w.namespace)} / ${esc(w.container)}</span></h3>
+    <div class="meta">${w.dag_id ? "DAG " + esc(w.dag_id) + " · task " + esc(w.task_id) + " · " : ""}${w.runs} запусков,
+      суммарно ${hours(w.runtime_h)}${w.request_changed ? " · <b>request менялся за период</b>" : ""}</div>
+    <div style="margin-top:6px">Сейчас: CPU <b>${cores(w.cpu_req)}</b>, память <b>${gib(w.mem_req)}</b> →
+      рекомендация: CPU <b>${cores(w.cpu_rec)}</b>, память <b>${gib(w.mem_rec)}</b>
+      (пик ${cores(w.cpu_max)} / ${gib(w.mem_max)})</div>
+    ${(w.notes || []).length ? "<ul>" + w.notes.map((n) => `<li>${esc(n)}</li>`).join("") + "</ul>" : ""}</div>`;
+}
+
+function openRuns(wid) {
+  Object.assign(st.runs, {wid, q: "", limit: 300});
+  $("#run-q").value = "";
+  showTab("runs");
+}
+
+function showTab(t) {
+  document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === t));
+  $("#tab-wl").hidden = t !== "wl";
+  $("#tab-runs").hidden = t !== "runs";
+  if (report) (t === "wl" ? renderWorkloads : renderRuns)();
+}
+
+function renderSummary() {
+  const s = report.summary;
+  const share = (a, b) => b ? Math.round(a / b * 100) + "%" : "—";
+  const tiles = [
+    ["Задач с перерасходом", s.over, `из ${s.workloads} · порог ${Math.round(report.waste_threshold * 100)}%`],
+    ["Нехватка ресурсов", s.under, `OOMKilled запусков: ${s.oom_runs}`],
+    ["Запусков за период", num(s.runs, 0), `${report.lookback_days} дн.`],
+    ["Простой памяти", num(s.mem_idle_gh, 0) + " GiB·ч", `${share(s.mem_idle_gh, s.mem_req_gh)} от запрошенных ${num(s.mem_req_gh, 0)}`],
+    ["Простой CPU", num(s.cpu_idle_ch, 0) + " core·ч", `${share(s.cpu_idle_ch, s.cpu_req_ch)} от запрошенных ${num(s.cpu_req_ch, 0)}`],
+    ["Waste памяти (request − пик)", num(s.mem_waste_gib, 0) + " GiB", `CPU: ${num(s.cpu_waste_cores, 1)} ядер`],
+  ];
+  $("#tiles").innerHTML = tiles.map(([l, v, sub]) => `<div class="tile"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`).join("");
+  $("#meta").textContent = `${report.namespaces.join(", ") || "все неймспейсы"} · отчёт от ${dtFull(report.generated_at)} · за ${report.lookback_days} дн.`;
+  $("#buf").textContent = (1 + report.request_buffer).toFixed(1);
+}
+
+function renderStatus(s) {
+  $("#refresh").disabled = s.running;
+  $("#state").textContent = s.running ? "⏳ идёт анализ…" : s.next_run ? `следующий: ${dtFull(s.next_run)}` : "";
+  const n = [];
+  if (s.last_error) n.push(`<div class="notice err">Последний запуск анализа завершился ошибкой (показан предыдущий отчёт):\n${esc(s.last_error)}</div>`);
+  if (!report) n.push(`<div class="notice">${s.running ? "Идёт первый анализ, это займёт несколько минут…" : "Отчёта ещё нет. Нажмите «Обновить»."}</div>`);
+  $("#notices").innerHTML = n.join("");
+  $("#xlsx").hidden = !report;
+}
+
+let wasRunning = false;
+async function load() {
+  const r = await fetch(api("api/report"), {cache: "no-store"});
+  const data = await r.json();
+  report = data.report;
+  $("#xlsx").href = api("report.xlsx");
+  $("#content").hidden = !report;
+  if (!report) $("#meta").textContent = (clusters.find((c) => c.id === cid) || {}).url || "";
+  if (report) {
+    wlById = new Map(report.workloads.map((w) => [w.id, w]));
+    report.runs.forEach((r) => r.w = wlById.get(r.wid));
+    renderSummary();
+    showTab($(".tab.active").dataset.tab);
+  }
+  renderStatus(data.status);
+  wasRunning = data.status.running;
+}
+
+async function poll() {
+  try {
+    const s = await (await fetch(api("api/status"), {cache: "no-store"})).json();
+    if (wasRunning && !s.running) return load();
+    wasRunning = s.running;
+    renderStatus(s);
+  } catch (e) { /* server restarting */ }
+}
+
+$("#refresh").onclick = async () => {
+  $("#refresh").disabled = true;
+  const r = await (await fetch(api("api/refresh"), {method: "POST"})).json();
+  if (!r.started) alert("Анализ не запущен: " + r.reason);
+  poll();
+};
+document.querySelectorAll(".tab").forEach((b) => b.onclick = () => showTab(b.dataset.tab));
+document.querySelectorAll("[data-f]").forEach((b) => b.onclick = () => {
+  document.querySelectorAll("[data-f]").forEach((x) => x.classList.toggle("active", x === b));
+  st.wl.f = b.dataset.f; renderWorkloads();
+});
+$("#wl-q").oninput = (e) => { st.wl.q = e.target.value; renderWorkloads(); };
+$("#run-q").oninput = (e) => { st.runs.q = e.target.value; st.runs.limit = 300; renderRuns(); };
+$("#run-oom").onchange = (e) => { st.runs.oom = e.target.checked; renderRuns(); };
+$("#run-clear").onclick = () => { st.runs.wid = null; renderRuns(); };
+$("#run-more").onclick = () => { st.runs.limit += 500; renderRuns(); };
+
+// ── Clusters ──────────────────────────────────────────────────────────
+async function loadClusters() {
+  const data = await (await fetch("api/clusters", {cache: "no-store"})).json();
+  clusters = data.clusters;
+  $("#edit-clusters").hidden = !data.editable;
+  const want = decodeURIComponent((location.hash.match(/cluster=([^&]+)/) || [])[1] || "") || store.get("cluster");
+  cid = (clusters.find((c) => c.id === want) || clusters[0] || {}).id || null;
+  $("#cluster").innerHTML = clusters.map((c) =>
+    `<option value="${esc(c.id)}">${esc(c.name)}${c.namespaces.length ? " · " + esc(c.namespaces.join(", ")) : ""}</option>`).join("");
+  $("#cluster").value = cid;
+  $("#cluster").hidden = clusters.length < 2 && !data.editable;
+}
+
+function selectCluster(id) {
+  cid = id;
+  store.set("cluster", id);
+  history.replaceState(null, "", "#cluster=" + encodeURIComponent(id));
+  report = null;
+  Object.assign(st.runs, {wid: null, q: "", limit: 300});
+  $("#run-q").value = "";
+  showTab("wl");
+  load();
+}
+
+function clRow(c) {
+  return `<tr><td><input data-k="name" value="${esc(c.name)}" placeholder="prod"></td>
+    <td><input data-k="url" value="${esc(c.url)}" placeholder="http://vmselect/select/0/prometheus"></td>
+    <td><input data-k="namespaces" value="${esc((c.namespaces || []).join(", "))}" placeholder="mpa-airflow-6679"></td>
+    <td><button class="cl-del" title="Удалить">✕</button></td></tr>`;
+}
+function bindDel() {
+  document.querySelectorAll(".cl-del").forEach((b) => b.onclick = () => b.closest("tr").remove());
+}
+$("#edit-clusters").onclick = () => {
+  $("#cl-rows").innerHTML = clusters.map(clRow).join("");
+  bindDel();
+  $("#cl-err").textContent = "";
+  $("#clusters-panel").hidden = false;
+};
+$("#cl-add").onclick = () => {
+  $("#cl-rows").insertAdjacentHTML("beforeend", clRow({name: "", url: "", namespaces: []}));
+  bindDel();
+};
+$("#cl-cancel").onclick = () => { $("#clusters-panel").hidden = true; };
+$("#cl-save").onclick = async () => {
+  const items = [...document.querySelectorAll("#cl-rows tr")].map((tr) => {
+    const o = {};
+    tr.querySelectorAll("input").forEach((i) => o[i.dataset.k] = i.value.trim());
+    o.namespaces = o.namespaces.split(",").map((x) => x.trim()).filter(Boolean);
+    return o;
+  });
+  const r = await fetch("api/clusters", {method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(items)});
+  const data = await r.json();
+  if (!r.ok) { $("#cl-err").textContent = data.detail || "Ошибка сохранения"; return; }
+  $("#clusters-panel").hidden = true;
+  await loadClusters();
+  selectCluster(cid);
+};
+$("#cluster").onchange = (e) => selectCluster(e.target.value);
+
+loadClusters().then(load).catch((e) => { $("#notices").innerHTML = `<div class="notice err">Не удалось загрузить отчёт: ${esc(e)}</div>`; });
+setInterval(poll, 15000);
+</script>
+</body>
+</html>

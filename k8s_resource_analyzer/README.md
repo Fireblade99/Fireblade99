@@ -49,6 +49,29 @@ python main.py -c config.yaml -o excel
 | `--use-proxy` | Ходить в VM через `HTTP(S)_PROXY`. По умолчанию прокси **игнорируется**, потому что корпоративный прокси обычно не видит внутренние адреса кластера |
 | `--lookback-days 3` | Глубина анализа |
 
+## Веб-интерфейс в контейнере
+
+Один контейнер на хосте показывает последний отчёт по каждому кластеру: сводку, задачи с сортировкой, поиском и фильтром, запуски выбранной задачи и кнопку «Скачать Excel».
+
+- **Анализ идёт в фоне по расписанию** (`web.refresh_interval_hours`, по умолчанию раз в сутки) и по кнопке «Обновить» (не чаще раза в `min_manual_refresh_minutes`). Открытие страницы VM не нагружает: отчёт берётся с диска.
+- **Кластеры**: переключаются в шапке. Кнопкой «Кластеры…» можно добавить кластер, изменить URL или неймспейсы и удалить кластер без пересборки и перезапуска. Список хранится в `/data/clusters.json`, при первом запуске берётся из `clusters:` в `config.yaml`. Анализы разных кластеров выполняются строго по очереди.
+- Если анализ упал (VM недоступна), показывается последний удачный отчёт и текст ошибки.
+- Kubernetes API не используется: requests и limits берутся из kube-state-metrics.
+
+```bash
+cd k8s_resource_analyzer
+cp config.example.yaml config.yaml        # URL, неймспейсы, clusters:
+docker compose up -d --build
+# http://<хост>:8080
+```
+
+- Вход по паролю: раскомментируйте `WEB_USER` / `WEB_PASSWORD` в `docker-compose.yml`.
+- `TZ` в `docker-compose.yml` задаёт часовой пояс для времени в Excel. В браузере время показывается в поясе пользователя.
+- **Корпоративный прокси при сборке.** Если `pip install` падает с `CERTIFICATE_VERIFY_FAILED`, положите корневой сертификат прокси (PEM, `*.crt`) в `certs/`. Если PyPI недоступен совсем, соберите с внутренним зеркалом: `docker compose build --build-arg PIP_INDEX_URL=https://<nexus>/repository/pypi/simple`.
+- Данные лежат в volume `analyzer-data`. Если вместо него монтируете папку хоста, выдайте права UID 10001: `chown -R 10001 ./data`.
+
+Без Docker: `pip install -r requirements-web.txt && python web.py -c config.yaml`.
+
 ## Ограничения
 
 - **Колонки DAG / Task / Run ID** заполняются, только если kube-state-metrics отдаёт лейблы подов Airflow (`--metric-labels-allowlist=pods=[dag_id,task_id,run_id,try_number]`). `--check` показывает, есть ли они. Без лейблов группировка идёт по имени пода без случайного суффикса, как раньше.

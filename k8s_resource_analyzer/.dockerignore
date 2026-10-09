@@ -1,0 +1,7 @@
+venv/
+.venv/
+data/
+tests/
+**/__pycache__/
+*.xlsx
+config.yaml

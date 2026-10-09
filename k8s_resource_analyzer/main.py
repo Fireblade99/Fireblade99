@@ -36,7 +36,7 @@ import sys
 
 from src.config import Config
 from src.core.analyzer import ResourceAnalyzer
-from src.core.recommender import Recommender
+from src.pipeline import build_recommender
 from src.reporters.console import print_recommendations
 from src.reporters.json_reporter import to_json
 from src.reporters import excel_reporter, email_sender
@@ -231,16 +231,7 @@ def main() -> int:
     logger.info("Analysis complete: %d workload groups", len(groups))
 
     # ── Recommendations ───────────────────────────────────────────────
-    recommender = Recommender(
-        cpu_request_buffer=config.analysis.cpu_request_buffer,
-        memory_request_buffer=config.analysis.memory_request_buffer,
-        cpu_limit_buffer=config.analysis.cpu_limit_buffer,
-        memory_limit_buffer=config.analysis.memory_limit_buffer,
-        waste_threshold_ratio=config.analysis.waste_threshold_ratio,
-        min_waste_cpu_cores=config.analysis.min_waste_cpu_cores,
-        min_waste_memory_mb=config.analysis.min_waste_memory_mb,
-    )
-    recommendations = recommender.process_all(groups)
+    recommendations = build_recommender(config).process_all(groups)
 
     # ── Output ────────────────────────────────────────────────────────
     show_only_waste = config.output.show_only_waste

@@ -72,12 +72,39 @@ class EmailConfig:
 
 
 @dataclass
+class ClusterConfig:
+    """One analysed cluster: its VictoriaMetrics/Prometheus URL and namespaces."""
+
+    name: str = "default"
+    url: str = ""
+    namespaces: List[str] = field(default_factory=list)
+
+
+@dataclass
+class WebConfig:
+    # Where the last report (report.json + report.xlsx) is kept between restarts
+    data_dir: str = "./data"
+    # Scheduled analysis; the UI never queries the backend itself
+    refresh_interval_hours: float = 24.0
+    # The "Refresh" button is ignored if the last run started less than N minutes ago
+    min_manual_refresh_minutes: int = 10
+    # Optional HTTP basic auth (prefer env WEB_USER / WEB_PASSWORD)
+    auth_user: str = ""
+    auth_password: str = ""
+    # Allow adding/editing clusters from the UI (stored in <data_dir>/clusters.json)
+    allow_edit_clusters: bool = True
+
+
+@dataclass
 class Config:
     prometheus: PrometheusConfig = field(default_factory=PrometheusConfig)
     kubernetes: KubernetesConfig = field(default_factory=KubernetesConfig)
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     email: EmailConfig = field(default_factory=EmailConfig)
+    web: WebConfig = field(default_factory=WebConfig)
+    # Web UI: several clusters; empty → one cluster from prometheus.url + analysis.namespaces
+    clusters: List[ClusterConfig] = field(default_factory=list)
 
     @classmethod
     def from_file(cls, path: str) -> "Config":
@@ -94,6 +121,10 @@ class Config:
             cfg.output = OutputConfig(**data["output"])
         if "email" in data:
             cfg.email = EmailConfig(**data["email"])
+        if "web" in data:
+            cfg.web = WebConfig(**data["web"])
+        if data.get("clusters"):
+            cfg.clusters = [ClusterConfig(**c) for c in data["clusters"]]
         return cfg
 
     @classmethod
